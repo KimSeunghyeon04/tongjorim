@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f7f8fc">
+  <title>Relay 집필실</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/writer.css">
+  <script type="module" src="/writer.js"></script>
+</head>
+<body class="writer">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-icon" aria-hidden="true"><i></i><i></i></span>
+      <span>Relay</span>
+      <span class="brand-caption">소설 집필실</span>
+    </div>
+    <div class="topbar-actions">
+      <a href="/chat" class="chat-link">채팅</a>
+      <button class="outline-button" id="open-files" type="button">
+        <span class="download-icon" aria-hidden="true"></span>작품 파일
+      </button>
+    </div>
+  </header>
+
+  <nav class="project-bar" aria-label="작품">
+    <div class="project-controls">
+      <label for="project-select">작품</label>
+      <select class="writing-field project-select" id="project-select"></select>
+      <button type="button" class="quiet-button" id="add-project">
+        <span class="icon-plus" aria-hidden="true"></span> 새 작품
+      </button>
+    </div>
+    <div class="writer-connection" role="status">
+      <span class="connection-dot" id="connection-dot" aria-hidden="true"></span>
+      <span id="connection-label">모델 목록 확인 중</span>
+      <button type="button" class="quiet-button" id="refresh-catalog" hidden>새로고침</button>
+    </div>
+  </nav>
+
+  <div class="writing-workspace">
+    <main class="manuscript-stage" aria-label="원고 편집기">
+      <div class="manuscript-inner">
+        <div class="manuscript-toolbar">
+          <h1 id="active-project-name"></h1>
+          <div class="manuscript-toolbar-actions">
+            <span id="save-status" class="save-status" role="status"></span>
+            <button type="button" class="quiet-button" id="open-revision">문단 퇴고</button>
+            <a href="#writing-tools" class="quiet-button tools-jump">집필 도구</a>
+          </div>
+        </div>
+        <p id="storage-error" class="storage-error" role="alert" hidden></p>
+        <div class="paper">
+          <div class="paper-label"><label for="manuscript">원고</label><span id="character-count"></span></div>
+          <textarea id="manuscript" class="manuscript" placeholder="첫 문장을 쓰거나, 이어쓰기 지시로 소설을 시작하세요." rows="8" spellcheck="false"></textarea>
+        </div>
+
+        <section class="writing-proposal" id="proposal" aria-labelledby="proposal-title" hidden>
+          <div class="proposal-header">
+            <h2 id="proposal-title" tabindex="-1">이어쓰기 초안</h2>
+            <span id="proposal-model"></span>
+          </div>
+          <p class="proposal-status" id="proposal-status" role="status"></p>
+          <p class="field-hint proposal-metrics" id="proposal-usage" hidden></p>
+          <details class="proposal-original" id="proposal-original" hidden>
+            <summary>기존 문단</summary>
+            <p id="proposal-original-text"></p>
+          </details>
+          <div class="proposal-body" id="proposal-body" tabindex="0" aria-label="생성된 원고" hidden></div>
+          <div class="proposal-actions" id="proposal-actions">
+            <button class="outline-button" id="stop-generation" type="button" hidden>
+              <span class="icon-stop" aria-hidden="true"></span> 생성 중지
+            </button>
+            <button type="button" class="quiet-button" id="discard-proposal">초안 닫기</button>
+            <button type="button" class="writing-primary" id="accept-proposal">원고에 추가</button>
+          </div>
+        </section>
+        <section class="writing-proposal request-preview" id="request-preview" aria-labelledby="request-preview-title" hidden>
+          <div class="proposal-header">
+            <h2 id="request-preview-title" tabindex="-1">이어쓰기 요청</h2>
+            <button class="quiet-button" type="button" id="close-request-preview">닫기</button>
+          </div>
+          <p class="proposal-status" id="request-preview-status" role="status"></p>
+          <div class="request-preview-data" id="request-preview-data" hidden>
+            <p class="field-hint" id="request-preview-estimate"></p>
+            <div id="request-blocks" class="request-blocks"></div>
+            <section id="lore-preview-section" aria-labelledby="lore-preview-title">
+              <h3 id="lore-preview-title">로어북 카드 활성화</h3>
+              <ul id="lore-activation" class="evidence-list"></ul>
+            </section>
+            <section id="past-preview-section" aria-labelledby="past-preview-title">
+              <h3 id="past-preview-title">과거 원문 위치</h3>
+              <p class="field-hint" id="past-search-summary"></p>
+              <ul class="evidence-list" id="past-reading-list"></ul>
+            </section>
+            <details class="request-json">
+              <summary>전송 JSON</summary>
+              <pre id="request-json"></pre>
+            </details>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <aside class="writing-tools" id="writing-tools" aria-label="집필 도구" tabindex="-1">
+      <div class="tool-switcher" role="group" aria-label="집필 도구 선택">
+        <button type="button" data-panel="generate" aria-controls="generate-panel" aria-pressed="true">이어쓰기</button>
+        <button type="button" data-panel="notes" aria-controls="notes-panel" aria-pressed="false">작품 메모</button>
+        <button type="button" data-panel="prompt" aria-controls="prompt-panel" aria-pressed="false">프롬프트</button>
+        <button type="button" data-panel="references" aria-controls="references-panel" aria-pressed="false">참고 자료</button>
+      </div>
+      <form id="generate-panel" class="tool-panel">
+        <div class="writing-input">
+          <label for="direction">작가의 노트</label>
+          <textarea class="writing-field" id="direction" rows="5" maxlength="1200" placeholder="누가 등장하고 어떤 일이 일어날지 적어 주세요."></textarea>
+          <label for="author-mode">적용 범위</label>
+          <select class="writing-field" id="author-mode">
+            <option value="persistent">계속 적용</option>
+            <option value="once">이번 분량에만 적용</option>
+          </select>
+        </div>
+        <div class="writing-input">
+          <label for="writing-model">이어쓰기 모델</label>
+          <select class="writing-field" id="writing-model"></select>
+          <p class="field-hint" id="model-cost"></p>
+        </div>
+        <div class="writing-input">
+          <label for="writing-limit">생성 한도</label>
+          <select class="writing-field" id="writing-limit">
+            <option value="1024">1,024 토큰</option>
+            <option value="2048">2,048 토큰</option>
+            <option value="4096">4,096 토큰</option>
+          </select>
+        </div>
+        <div class="generation-actions">
+          <button class="writing-primary" id="generate" type="submit">이어서 쓰기</button>
+          <button class="outline-button" id="preview-request" type="button">요청 미리보기</button>
+          <p class="field-hint" id="writing-estimate"></p>
+        </div>
+        <div class="memory-shortcut">
+          <button class="quiet-button" id="open-memory" type="button">원고 메모</button>
+          <p class="field-hint" id="memory-short-status" role="status"></p>
+        </div>
+        <details class="note-planner" id="revision">
+          <summary>선택 문단 퇴고</summary>
+          <div class="memory-controls">
+            <p class="field-hint" id="revision-selection">원고에서 퇴고할 한 문단의 일부를 선택해 주세요.</p>
+            <div class="writing-input">
+              <label for="revision-model">퇴고 모델</label>
+              <select class="writing-field" id="revision-model"></select>
+            </div>
+            <div class="writing-input">
+              <label for="revision-direction">퇴고 지시</label>
+              <textarea class="writing-field" id="revision-direction" rows="3" maxlength="1200"></textarea>
+            </div>
+            <p class="field-hint" id="revision-estimate"></p>
+            <button class="writing-primary" id="generate-revision" type="button">수정안 만들기</button>
+          </div>
+        </details>
+      </form>
+      <div id="notes-panel" class="tool-panel" hidden>
+        <div class="writing-input">
+          <label for="project-title">작품 제목</label>
+          <input class="writing-field" id="project-title" type="text" maxlength="120" placeholder="제목 없는 소설" autocomplete="off">
+        </div>
+        <details class="note-planner" id="manuscript-memory">
+          <summary>원고로 메모 갱신</summary>
+          <div class="memory-controls">
+            <p class="field-hint">원고의 사건, 인물 상태와 복선을 정리해 다음 이어쓰기에 사용해요.</p>
+            <label class="memory-auto"><input id="memory-auto" type="checkbox"> 원고에 추가할 때 자동 갱신</label>
+            <div class="writing-input">
+              <label for="memory-model">메모 갱신 모델</label>
+              <select class="writing-field" id="memory-model"></select>
+            </div>
+            <p class="field-hint">갱신할 원고는 OpenRouter를 통해 선택한 모델로 전송돼요.</p>
+            <p class="field-hint" id="memory-estimate"></p>
+            <p class="field-hint" id="memory-usage"></p>
+            <div class="memory-buttons">
+              <button class="writing-primary" id="memory-refresh" type="button">갱신하기</button>
+              <button class="outline-button" id="memory-stop" type="button" hidden>갱신 중지</button>
+            </div>
+            <p class="field-hint" id="memory-status" role="status" tabindex="-1"></p>
+            <div class="writing-input" id="memory-content" hidden>
+              <label for="memory-text">AI가 정리한 원고 메모</label>
+              <textarea class="writing-field" id="memory-text" rows="8" readonly></textarea>
+            </div>
+          </div>
+        </details>
+        <details class="note-planner" id="note-planner">
+          <summary>메모 작성 도우미</summary>
+          <form class="note-planner-form" id="note-planner-form">
+            <div class="writing-input">
+              <div class="field-heading">
+                <label for="plan-target">작성할 메모</label>
+                <button type="button" class="quiet-button" id="edit-plan-prompt">프롬프트 편집</button>
+              </div>
+              <select class="writing-field" id="plan-target"></select>
+            </div>
+            <div class="writing-input">
+              <label for="plan-idea">아이디어나 요청 <span class="optional-label">(선택)</span></label>
+              <textarea class="writing-field" id="plan-idea" rows="4"></textarea>
+            </div>
+            <div class="generation-actions">
+              <button class="writing-primary" id="plan-generate" type="submit">초안 만들기</button>
+              <p class="field-hint">작품 메모와 요청을 OpenRouter에 보내 초안을 만들어요.</p>
+            </div>
+          </form>
+          <section class="note-draft" id="note-draft" aria-labelledby="note-draft-title" hidden>
+            <h3 id="note-draft-title" tabindex="-1"></h3>
+            <p class="field-hint" id="note-draft-status" role="status"></p>
+            <textarea class="writing-field" id="note-draft-text" rows="7" aria-labelledby="note-draft-title" hidden></textarea>
+            <div class="note-draft-actions">
+              <button type="button" class="outline-button" id="plan-stop" hidden>생성 중지</button>
+              <button type="button" class="quiet-button" id="plan-discard">초안 버리기</button>
+              <button type="button" class="writing-primary" id="plan-accept">메모에 추가</button>
+            </div>
+          </section>
+        </details>
+        <p class="field-hint" id="import-formats">TXT·Markdown 파일을 불러오면 해당 메모 끝에 내용이 추가돼요.</p>
+        <div class="writing-input">
+          <div class="field-heading">
+            <label for="synopsis">줄거리</label>
+            <button type="button" class="quiet-button" id="synopsis-import" aria-label="줄거리 파일 불러오기" aria-describedby="import-formats">파일 불러오기</button>
+          </div>
+          <input type="file" id="synopsis-file" accept=".txt,.md,.markdown" multiple hidden>
+          <textarea class="writing-field" id="synopsis" rows="4" placeholder="이야기의 큰 흐름과 결말 계획을 적어 두세요."></textarea>
+          <p class="field-hint import-status" id="synopsis-status" role="status" hidden></p>
+        </div>
+        <div class="writing-input">
+          <div class="field-heading">
+            <label for="character-notes">인물</label>
+            <button type="button" class="quiet-button" id="character-notes-import" aria-label="인물 파일 불러오기" aria-describedby="import-formats">파일 불러오기</button>
+          </div>
+          <input type="file" id="character-notes-file" accept=".txt,.md,.markdown" multiple hidden>
+          <textarea class="writing-field" id="character-notes" rows="4" placeholder="인물의 성격, 관계와 말투를 적어 두세요."></textarea>
+          <p class="field-hint import-status" id="character-notes-status" role="status" hidden></p>
+        </div>
+        <div class="writing-input">
+          <div class="field-heading">
+            <label for="world-notes">세계관</label>
+            <button type="button" class="quiet-button" id="world-notes-import" aria-label="세계관 파일 불러오기" aria-describedby="import-formats">파일 불러오기</button>
+          </div>
+          <input type="file" id="world-notes-file" accept=".txt,.md,.markdown" multiple hidden>
+          <textarea class="writing-field" id="world-notes" rows="4" placeholder="배경, 장소와 세계의 규칙을 적어 두세요."></textarea>
+          <p class="field-hint import-status" id="world-notes-status" role="status" hidden></p>
+        </div>
+        <p class="field-hint">원고를 이어쓸 때 이 메모를 함께 참고해요.</p>
+        <details class="note-planner" id="legacy-scene-notes" hidden>
+          <summary>이전 장면의 제목과 지시</summary>
+          <ul class="legacy-notes-list" id="legacy-notes-list"></ul>
+        </details>
+      </div>
+      <div id="prompt-panel" class="tool-panel" hidden>
+        <div class="writing-input">
+          <label for="prompt-target">적용할 기능</label>
+          <select class="writing-field" id="prompt-target">
+            <option value="continuation">원고 이어쓰기</option>
+            <option value="memory">원고 메모 갱신</option>
+            <option value="revision">선택 문단 퇴고</option>
+          </select>
+        </div>
+        <div class="writing-input">
+          <div class="field-heading">
+            <label for="system-prompt">시스템 프롬프트</label>
+            <button type="button" class="quiet-button" id="reset-system-prompt" disabled>기본값 복원</button>
+          </div>
+          <textarea class="writing-field system-prompt-field" id="system-prompt" rows="15" aria-describedby="system-prompt-hint"></textarea>
+          <p class="field-hint" id="system-prompt-hint">이 작품에서 선택한 기능에 적용돼요. 비워 두면 해당 기능의 기본 프롬프트를 사용해요.</p>
+          <p class="visually-hidden" id="system-prompt-status" role="status"></p>
+        </div>
+      </div>
+      <div id="references-panel" class="tool-panel" hidden>
+        <details class="note-planner" open>
+          <summary>이어쓰기 참고 순서</summary>
+          <ul id="reference-list" class="reference-list"></ul>
+        </details>
+        <details class="note-planner" open>
+          <summary>과거 원고 검색</summary>
+          <div class="memory-controls">
+            <p class="field-hint" id="search-state" role="status"></p>
+            <p class="field-hint" id="embedding-consent">의미 검색을 켜면 과거 문단과 이번 지시를 OpenRouter에 보냅니다. ‘최근 원고’를 켠 경우 검색어에 최근 문단 일부도 포함됩니다. 색인 및 검색에 별도 비용이 발생할 수 있어요.</p>
+            <label class="memory-auto"><input id="semantic-enabled" type="checkbox" aria-describedby="embedding-consent"> 의미 검색 켜기</label>
+            <div class="writing-input" id="embedding-model-settings" hidden>
+              <label for="embedding-model">임베딩 모델</label>
+              <select class="writing-field" id="embedding-model"></select>
+              <p class="field-hint" id="embedding-catalog-status" role="status"></p>
+            </div>
+            <p class="field-hint" id="embedding-estimate"></p>
+            <p class="field-hint" id="embedding-usage"></p>
+            <button class="outline-button" id="retry-search" type="button">다시 검색</button>
+          </div>
+        </details>
+        <section class="lore-section" aria-labelledby="lore-title">
+          <h2 id="lore-title">로어북</h2>
+          <p class="field-hint" id="lore-empty">추가한 카드가 없어요.</p>
+          <ul class="lore-list" id="lore-list"></ul>
+          <details class="note-planner" id="lore-editor">
+            <summary>카드 작성</summary>
+            <form class="note-planner-form" id="lore-form">
+              <div class="writing-input">
+                <label for="lore-kind">종류</label>
+                <select id="lore-kind" class="writing-field"></select>
+              </div>
+              <div class="writing-input">
+                <label for="lore-name">카드 이름</label>
+                <input class="writing-field" id="lore-name" required maxlength="100">
+              </div>
+              <div class="writing-input">
+                <label for="lore-aliases">별칭</label>
+                <input class="writing-field" id="lore-aliases" maxlength="1620" placeholder="쉼표로 구분">
+              </div>
+              <div class="writing-input">
+                <label for="lore-description">설명</label>
+                <textarea class="writing-field" id="lore-description" rows="4" required maxlength="1800"></textarea>
+              </div>
+              <div class="writing-input">
+                <label for="lore-priority">우선순위</label>
+                <input class="writing-field" id="lore-priority" type="number" min="-100" max="100" value="0" required>
+              </div>
+              <label class="memory-auto"><input id="lore-always" type="checkbox"> 항상 포함</label>
+              <p class="field-hint" id="lore-form-status" role="status"></p>
+              <div class="memory-buttons">
+                <button type="submit" id="save-lore" class="writing-primary">카드 추가</button>
+                <button type="button" id="lore-cancel" class="quiet-button" hidden>취소</button>
+              </div>
+            </form>
+          </details>
+        </section>
+      </div>
+    </aside>
+  </div>
+  <dialog class="files-dialog" id="files-dialog" aria-labelledby="files-title">
+    <form method="dialog" class="proposal-header">
+      <h2 id="files-title">작품 파일</h2>
+      <button class="quiet-button">닫기</button>
+    </form>
+    <section class="file-section" aria-labelledby="backup-title">
+      <h3 id="backup-title">원고와 작품 설정</h3>
+      <div class="file-actions">
+        <button class="outline-button" id="export-project" type="button">TXT 내보내기</button>
+        <button class="outline-button" id="download-backup" type="button">JSON 백업</button>
+        <button class="outline-button" id="restore-backup" type="button">새 작품으로 복원</button>
+      </div>
+      <input id="restore-backup-file" type="file" accept=".json,application/json" hidden>
+    </section>
+    <section class="file-section" aria-labelledby="pack-title">
+      <h3 id="pack-title">설정 묶음</h3>
+      <p class="field-hint">가져오면 선택한 항목의 현재 설정을 교체해요.</p>
+      <div class="file-actions">
+        <label class="memory-auto"><input id="pack-lore" type="checkbox" checked> 로어북</label>
+        <label class="memory-auto"><input id="pack-prompts" type="checkbox" checked> 문체·프롬프트</label>
+      </div>
+      <div class="file-actions">
+        <button class="outline-button" id="download-pack" type="button">설정 내보내기</button>
+        <button class="outline-button" id="import-pack" type="button">설정 가져오기</button>
+      </div>
+      <input id="import-pack-file" type="file" accept=".json,application/json" hidden>
+    </section>
+    <p class="field-hint" id="files-status" role="status"></p>
+  </dialog>
+</body>
+</html>

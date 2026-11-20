@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f7f8fc">
+  <title>Relay · OpenRouter 채팅</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-icon" aria-hidden="true"><i></i><i></i></span>
+      <span>Relay</span>
+      <span class="brand-caption">OpenRouter 채팅</span>
+    </div>
+    <div class="topbar-actions">
+      <a class="outline-button" href="/">집필실</a>
+      <button class="outline-button" id="new-chat" type="button" disabled>
+        <span class="icon-plus" aria-hidden="true"></span> 새 대화
+      </button>
+    </div>
+  </header>
+
+  <div class="workspace">
+    <aside class="sidebar" aria-labelledby="model-title">
+      <div class="model-panel">
+        <h2 id="model-title">응답 모델</h2>
+        <button type="button" id="choose-model" class="selected-model" aria-haspopup="dialog">
+          <span class="model-icon" aria-hidden="true"></span>
+          <span class="model-label">
+            <strong id="selected-name">Free Models Router</strong>
+            <span id="selected-id">openrouter/free</span>
+          </span>
+          <span class="chevron" aria-hidden="true"></span>
+        </button>
+        <p id="selected-price" class="model-price">사용 가능한 무료 모델을 자동으로 선택해요.</p>
+      </div>
+      <div class="connection" id="connection" role="status">
+        <span class="connection-dot" aria-hidden="true"></span>
+        <span id="connection-text">모델 목록 확인 중</span>
+        <button type="button" id="reload-models" hidden>재연결</button>
+      </div>
+    </aside>
+
+    <main class="main" aria-label="채팅 작업실">
+      <div class="conversation" id="conversation">
+        <div class="empty-state" id="empty-state">
+          <section class="welcome" aria-labelledby="welcome-heading">
+            <div class="welcome-copy">
+              <h1 id="welcome-heading">어떤 질문부터<br>시작할까요?</h1>
+              <p>모델을 고르고 질문을 보내보세요.</p>
+            </div>
+            <div class="route-art" aria-hidden="true">
+              <div class="route-source"><i></i><i></i></div>
+              <div class="route-path route-path-top"></div>
+              <div class="route-path route-path-center"></div>
+              <div class="route-path route-path-bottom"></div>
+              <div class="route-node route-node-top"><i></i></div>
+              <div class="route-node route-node-center"><i></i><i></i><i></i></div>
+              <div class="route-node route-node-bottom"><i></i></div>
+            </div>
+          </section>
+          <section class="starters" aria-labelledby="starter-title">
+            <h2 id="starter-title">바로 써볼 질문</h2>
+            <div class="starters-list">
+              <button type="button" data-prompt="API가 무엇인지 처음 배우는 사람에게 식당 주문에 비유해서 설명해 줘.">
+                <span class="starter-icon icon-book" aria-hidden="true"></span>
+                <span>개념 쉽게 설명하기</span><span class="starter-arrow" aria-hidden="true">↗</span>
+              </button>
+              <button type="button" data-prompt="파이썬으로 CSV 파일을 읽고 특정 열의 평균을 구하는 예제 코드를 작성해 줘.">
+                <span class="starter-icon icon-code" aria-hidden="true">‹›</span>
+                <span>예제 코드 만들기</span><span class="starter-arrow" aria-hidden="true">↗</span>
+              </button>
+              <button type="button" data-prompt="회의에서 나온 아이디어를 실행 계획으로 정리할 때 쓸 수 있는 간단한 양식을 만들어 줘.">
+                <span class="starter-icon icon-list" aria-hidden="true"></span>
+                <span>실행 계획 정리하기</span><span class="starter-arrow" aria-hidden="true">↗</span>
+              </button>
+            </div>
+          </section>
+        </div>
+        <div class="messages content-width" id="messages" aria-label="대화 내용" hidden></div>
+      </div>
+
+      <div class="composer-area">
+        <div class="content-width">
+          <div class="notice" id="notice" hidden>
+            <span id="notice-text" role="alert"></span>
+            <button type="button" class="text-button" id="retry-chat" hidden>다시 시도</button>
+          </div>
+          <form class="composer" id="chat-form">
+            <label class="visually-hidden" for="prompt">메시지</label>
+            <textarea id="prompt" rows="2" maxlength="8000" placeholder="메시지를 입력하세요" aria-describedby="composer-shortcuts"></textarea>
+            <div class="composer-toolbar">
+              <span class="shortcuts" id="composer-shortcuts"><kbd>Enter</kbd> 전송 <span aria-hidden="true">/</span> <kbd>Shift + Enter</kbd> 줄바꿈</span>
+              <button class="send-button" id="send" type="submit" disabled>
+                <span class="icon-send" aria-hidden="true"></span>전송
+              </button>
+              <button class="stop-button" id="stop" type="button" hidden>
+                <span class="icon-stop" aria-hidden="true"></span>중지
+              </button>
+            </div>
+          </form>
+          <p class="composer-note">대화 내용은 선택한 모델에 전달돼요.</p>
+          <p class="visually-hidden" id="chat-status" role="status"></p>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <dialog id="model-dialog" aria-labelledby="dialog-title">
+    <div class="dialog-header">
+      <h2 id="dialog-title">모델 선택</h2>
+      <form method="dialog"><button type="submit" class="close-button" aria-label="닫기">×</button></form>
+    </div>
+    <div class="model-query">
+      <label class="visually-hidden" for="model-search">모델 검색</label>
+      <input id="model-search" type="search" placeholder="모델 이름 또는 ID 검색" autocomplete="off" autofocus>
+      <div class="filters" role="group" aria-label="가격 필터">
+        <button type="button" data-free="true" aria-pressed="true">무료</button>
+        <button type="button" data-free="false" aria-pressed="false">전체</button>
+      </div>
+    </div>
+    <p class="model-list-status" id="model-list-status" role="status"></p>
+    <ul class="model-list" id="model-list"></ul>
+  </dialog>
+</body>
+</html>

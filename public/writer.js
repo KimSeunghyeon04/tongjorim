@@ -1,0 +1,1039 @@
+import { freeModel, pricing, requestCompletion } from './completion.js'
+import {
+  completionPayload, defaultMemoryPrompt, defaultNoteSystemPrompt, defaultRevisionPrompt, defaultSystemPrompt,
+  effectiveSystemPrompt, memoryOutputLimit, normalizeLineEndings, noteIdeaLimit, noteKinds, orderedWritingContext, referenceLabels,
+  systemPromptLimit, writingFields,
+} from './writing-config.mjs'
+import { memoryForPrompt, memoryReadThrough, memoryRequest, modelFor, setManuscriptText, updateManuscriptMemory } from './manuscript-memory.mjs'
+import { exportPack, exportProject, hasSceneNote, normalizeProjectManuscript, readPack, readProject, validProject, validProjectBase } from './project-files.mjs'
+import { refsFor, setupResearch, writingBody } from './research-panel.mjs'
+import { activeLore, paragraphRanges } from './retrieval.mjs'
+import { combineUsage, completionEstimate, estimateLabel, jsonRequest, usageLabel } from './request-tools.mjs'
+
+const get = id => document.getElementById(id)
+const projectSelect = get('project-select')
+const manuscript = get('manuscript')
+const projectTitle = get('project-title')
+const promptTarget = get('prompt-target')
+const systemPrompt = get('system-prompt')
+const resetSystemPrompt = get('reset-system-prompt')
+const noteFields = {
+  synopsis: 'synopsis',
+  'character-notes': 'characterNotes',
+  'world-notes': 'worldNotes',
+}
+const modelSelect = get('writing-model')
+const limitSelect = get('writing-limit')
+const generate = get('generate')
+const proposalSection = get('proposal')
+const proposalBody = get('proposal-body')
+const stop = get('stop-generation')
+const accept = get('accept-proposal')
+const discard = get('discard-proposal')
+const notePlanner = get('note-planner')
+const planTarget = get('plan-target')
+const planIdea = get('plan-idea')
+const planGenerate = get('plan-generate')
+const planDraftText = get('note-draft-text')
+const planAccept = get('plan-accept')
+const memoryPanel = get('manuscript-memory')
+const memoryAuto = get('memory-auto')
+const memoryRefresh = get('memory-refresh')
+const memoryStop = get('memory-stop')
+const memoryStatus = get('memory-status')
+const memoryShortStatus = get('memory-short-status')
+const memoryText = get('memory-text')
+// Use the same storage key so older tabs detect the migration before saving.
+const storageKey = 'relay.writing.v1'
+const workspaceVersion = 2
+const formatNumber = new Intl.NumberFormat('ko-KR')
+const previews = new Map()
+const plans = new WeakMap()
+const memoryJobs = new WeakMap()
+let models = [freeModel]
+let activeRequest
+let activePlanRequest
+let activePreview
+let revisionSelection
+let savedVersion
+let storageReadable = true
+let storageWarning = ''
+
+function makeProject(title = '제목 없는 소설') {
+  return {
+    id: crypto.randomUUID(), title, synopsis: '', characterNotes: '', worldNotes: '',
+    model: freeModel.id, maxTokens: 2048, manuscript: '', direction: '',
+  }
+}
+
+function sampleWorkspace() {
+  const sample = makeProject('안개 항로 (예시)')
+  sample.manuscript = [
+    '안개가 걷히기도 전에 항구의 시계가 다섯 번 울었다. 서윤은 표를 쥔 손을 코트 주머니에 넣었다. 선착장 끝에는 행선지를 적지 않은 배가 한 척 떠 있었다.',
+    '선장이 그녀의 표를 받더니 표 뒷면을 들여다보았다. 서윤도 그제야 거기에 낯선 글씨가 있다는 걸 알았다.',
+    '「돌아오는 편은 한 사람만.」',
+  ].join('\n\n')
+  sample.direction = '선장은 이 문장을 이미 알고 있다. 서로 모르는 척하는 두 사람의 짧은 대화로 장면을 이어간다.'
+  sample.synopsis = '항해 지도에 없는 섬에서 편지가 도착한다. 실종된 오빠가 보낸 편지라고 믿는 서윤은 새벽 여객선에 오른다.'
+  sample.characterNotes = '서윤: 지도 복원가. 낯선 표식은 쉽게 지나치지 않지만 사람의 속뜻을 바로 묻지는 않는다.\n선장: 이름을 밝히지 않는다. 행선지에 관해 짧게만 답한다.'
+  sample.worldNotes = '배경: 늦가을 항구. 서윤의 시점에서 과거형으로 서술한다.'
+  return { version: workspaceVersion, activeProjectId: sample.id, projects: [sample] }
+}
+
+function mergeProjectScenes({ scenes, activeSceneId, ...project }) {
+  const activeScene = scenes.find(scene => scene.id === activeSceneId) ?? scenes[0]
+  return {
+    ...project,
+    manuscript: scenes.reduce((text, scene) => appendParagraphs(text, normalizeLineEndings(scene.text)), ''),
+    direction: activeScene.direction,
+    legacySceneNotes: scenes.flatMap((scene, index) => scene.title || scene.direction ? [{
+      title: scene.title || `장면 ${index + 1}`,
+      direction: scene.direction,
+    }] : []),
+  }
+}
+
+function loadWorkspace() {
+  try {
+    savedVersion = localStorage.getItem(storageKey)
+    if (savedVersion === null) return sampleWorkspace()
+    const data = JSON.parse(savedVersion)
+    if (![1, workspaceVersion].includes(data?.version) || !Array.isArray(data.projects) || !data.projects.length ||
+        !data.projects.every(validProjectBase)) {
+      throw new Error('Unknown workspace')
+    }
+    if (data.version === 1 && data.projects.every(project => Array.isArray(project.scenes) &&
+        project.scenes.length && project.scenes.every(scene => hasSceneNote(scene) &&
+          typeof scene.id === 'string' && typeof scene.text === 'string'))) {
+      return { ...data, version: workspaceVersion, projects: data.projects.map(mergeProjectScenes) }
+    }
+    if (data.version === workspaceVersion && data.projects.every(validProject)) {
+      data.projects.forEach(normalizeProjectManuscript)
+      return data
+    }
+    throw new Error('Unknown workspace')
+  } catch {
+    storageReadable = false
+    storageWarning = '저장된 작업 공간을 열 수 없어요. 이 창에서 편집한 원고는 TXT로 내보낼 수 있어요.'
+    return { version: workspaceVersion, activeProjectId: '', projects: [makeProject()] }
+  }
+}
+
+const workspace = loadWorkspace()
+const currentProject = () => workspace.projects.find(project => project.id === workspace.activeProjectId) ?? workspace.projects[0]
+const projectName = project => project.title.trim() || '제목 없는 소설'
+
+function showStorageStatus() {
+  const error = get('storage-error')
+  if (error.textContent !== storageWarning) error.textContent = storageWarning
+  error.hidden = !storageWarning
+  const label = storageWarning ? '브라우저 저장 안 됨' : '브라우저에 저장됨'
+  if (get('save-status').textContent !== label) get('save-status').textContent = label
+}
+
+function saveWorkspace() {
+  if (storageReadable) {
+    try {
+      if (localStorage.getItem(storageKey) !== savedVersion) {
+        storageWarning = '다른 탭에서 작품이 바뀌었어요. 이 탭에서 수정한 내용을 TXT로 내보낸 뒤 새로고침해 주세요.'
+      } else {
+        const nextVersion = JSON.stringify(workspace)
+        localStorage.setItem(storageKey, nextVersion)
+        savedVersion = nextVersion
+        storageWarning = ''
+      }
+    } catch {
+      storageWarning = '브라우저에 저장할 수 없어요. 창을 닫기 전에 TXT로 내보내 주세요.'
+    }
+  }
+  showStorageStatus()
+  return !storageWarning
+}
+
+function renderProjectSelect() {
+  projectSelect.replaceChildren(...workspace.projects.map(project => new Option(projectName(project), project.id)))
+  projectSelect.value = currentProject().id
+  get('active-project-name').textContent = projectName(currentProject())
+}
+
+function renderLegacySceneNotes(notes = []) {
+  const archive = get('legacy-scene-notes')
+  archive.hidden = !notes.length
+  archive.open = false
+  get('legacy-notes-list').replaceChildren(...notes.map(note => {
+    const row = document.createElement('li')
+    const title = document.createElement('strong')
+    title.textContent = note.title
+    row.append(title)
+    if (note.direction) {
+      const direction = document.createElement('p')
+      direction.className = 'field-hint'
+      direction.textContent = note.direction
+      row.append(direction)
+    }
+    return row
+  }))
+}
+
+function renderModels() {
+  const project = currentProject()
+  for (const [select, purpose] of [[modelSelect, ''], [get('memory-model'), 'memory'], [get('revision-model'), 'revision']]) {
+    const selected = purpose ? project[`${purpose}Model`] ?? '' : project.model
+    const groups = ['무료', '유료 또는 가격 미확인'].map(label => Object.assign(document.createElement('optgroup'), { label }))
+    for (const model of models) groups[model.free ? 0 : 1].append(new Option(model.name || model.id, model.id))
+    select.replaceChildren(...(purpose ? [new Option('이어쓰기 모델 사용', '')] : []), ...groups.filter(group => group.children.length))
+    if (selected && !models.some(model => model.id === selected)) select.append(new Option(selected, selected))
+    select.value = selected
+  }
+  updateModelPrice()
+  renderEstimates()
+}
+
+function updateModelPrice() {
+  const model = models.find(item => item.id === modelSelect.value)
+  get('model-cost').textContent = model?.id === freeModel.id ? '사용 가능한 무료 모델을 자동으로 선택해요.'
+    : model ? pricing(model) : '가격 정보 없음'
+}
+
+function switchPanel(name) {
+  for (const button of document.querySelectorAll('[data-panel]')) {
+    button.setAttribute('aria-pressed', String(button.dataset.panel === name))
+  }
+  get('generate-panel').hidden = name !== 'generate'
+  get('notes-panel').hidden = name !== 'notes'
+  get('prompt-panel').hidden = name !== 'prompt'
+  get('references-panel').hidden = name !== 'references'
+}
+
+function updateCharacterCount() {
+  get('character-count').textContent = `${formatNumber.format(manuscript.value.length)}자`
+}
+
+function renderWorkspace() {
+  const project = currentProject()
+  closeRequestPreview()
+  revisionSelection = undefined
+  get('revision-direction').value = ''
+  renderProjectSelect()
+  renderModels()
+  projectTitle.value = project.title
+  manuscript.value = project.manuscript
+  manuscript.scrollTop = manuscript.scrollHeight
+  get('direction').value = project.direction
+  get('author-mode').value = project.authorMode ?? 'persistent'
+  for (const [id, key] of Object.entries(noteFields)) {
+    get(id).value = project[key] ?? ''
+    showNoteStatus(id)
+  }
+  renderLegacySceneNotes(project.legacySceneNotes)
+  renderPromptEditor()
+  limitSelect.value = String(project.maxTokens)
+  updateCharacterCount()
+  renderProposal()
+  renderPlanner()
+  renderMemory()
+  research.render()
+  syncControls()
+}
+
+function syncControls() {
+  const busy = Boolean(activeRequest || activePlanRequest)
+  for (const element of [generate, projectSelect, get('add-project'), modelSelect, limitSelect, get('open-files'), get('revision-model')]) {
+    element.disabled = busy
+  }
+  get('preview-request').disabled = busy || Boolean(activePreview)
+  generate.textContent = activeRequest && !previews.get(currentProject().id)?.revision ? '생성 중…' : '이어서 쓰기'
+  get('generate-revision').disabled = busy || !selectedRevision()
+  updatePlanControls()
+}
+
+function renderProposal() {
+  const preview = previews.get(currentProject().id)
+  proposalSection.hidden = !preview
+  if (!preview) return
+  get('proposal-title').textContent = preview.revision ? '문단 퇴고안' : '이어쓰기 초안'
+  get('proposal-original').hidden = !preview.revision
+  get('proposal-original').open = false
+  get('proposal-original-text').textContent = preview.revision?.text ?? ''
+  get('proposal-model').textContent = preview.model
+  get('proposal-usage').hidden = !preview.usage
+  get('proposal-usage').textContent = preview.usage ? usageLabel(preview.usage) : ''
+  proposalBody.hidden = !preview.text.trim()
+  proposalBody.textContent = preview.text
+  updateProposalActions()
+}
+
+function appendParagraphs(original, text) {
+  if (!original || !text) return original + text
+  const trailing = original.endsWith('\n\n') ? 2 : Number(original.endsWith('\n'))
+  const leading = text.startsWith('\n\n') ? 2 : Number(text.startsWith('\n'))
+  return original + '\n'.repeat(Math.max(0, 2 - trailing - leading)) + text
+}
+
+function updateProposalActions() {
+  const project = currentProject()
+  const preview = previews.get(project.id)
+  if (!preview) return
+  const changed = project.manuscript !== preview.original
+  get('proposal-status').textContent = changed ? '생성 요청 후 원고가 바뀌었어요. 다시 요청해 주세요.' : preview.status
+  accept.textContent = preview.revision ? '이 문단 교체' : '원고에 추가'
+  accept.hidden = Boolean(activeRequest)
+  accept.disabled = changed || !preview.text.trim() || (Boolean(preview.revision) && !preview.complete)
+  discard.hidden = Boolean(activeRequest)
+  stop.hidden = !activeRequest
+}
+
+async function loadCatalog() {
+  const label = get('connection-label')
+  const reload = get('refresh-catalog')
+  reload.hidden = true
+  label.textContent = '모델 목록 확인 중'
+  get('connection-dot').dataset.state = 'loading'
+  try {
+    const response = await fetch('/api/models')
+    if (!response.ok) throw new Error('Catalog request failed')
+    const data = await response.json()
+    if (!Array.isArray(data.models)) throw new Error('Catalog is invalid')
+    models = data.models
+    renderModels()
+    if (!data.catalogAvailable) throw new Error('Catalog unavailable')
+    label.textContent = data.keyConfigured ? '모델 목록 연결됨' : 'API 키 설정 필요'
+    get('connection-dot').dataset.state = data.keyConfigured ? 'online' : 'offline'
+  } catch {
+    label.textContent = '모델 목록 연결 실패'
+    get('connection-dot').dataset.state = 'offline'
+    reload.hidden = false
+  }
+}
+
+function selectedRevision() {
+  return revisionSelection?.original === currentProject().manuscript ? revisionSelection : undefined
+}
+
+function updateRevision() {
+  const start = manuscript.selectionStart
+  const end = manuscript.selectionEnd
+  const paragraph = start < end && paragraphRanges(manuscript.value).find(item => start < item.end && end > item.start &&
+    !manuscript.value.slice(Math.min(start, item.start), item.start).trim() &&
+    !manuscript.value.slice(item.end, Math.max(end, item.end)).trim())
+  revisionSelection = paragraph ? { ...paragraph, original: manuscript.value } : undefined
+  renderEstimates()
+  syncControls()
+}
+
+function revisionBody(project, paragraph) {
+  return {
+    model: modelFor(project, 'revision'), maxTokens: project.maxTokens, paragraph: paragraph.text,
+    direction: get('revision-direction').value, systemPrompt: project.notePrompts?.revision,
+  }
+}
+
+function estimate(payload) {
+  return estimateLabel(completionEstimate(payload, models.find(model => model.id === payload.model)))
+}
+
+function renderEstimates() {
+  const project = currentProject()
+  const keys = refsFor(project).filter(ref => ref.enabled).map(ref => ref.key)
+  const lore = keys.includes('lorebook') ? activeLore(project.lorebook ?? [], project.manuscript, project.direction) : { text: '' }
+  const hits = research.cachedHits(project, keys)
+  const { draft } = writingBody(project, keys, lore, hits ?? [])
+  const writing = completionPayload(project.model, project.maxTokens, effectiveSystemPrompt(project.systemPrompt, defaultSystemPrompt),
+    orderedWritingContext(draft, keys))
+  get('writing-estimate').textContent = estimate(writing) + (!hits && keys.includes('pastPassages') &&
+    project.manuscript.length > writingFields.manuscript ? ' · 과거 원문 반영 전' : '')
+
+  const paragraph = selectedRevision()
+  const status = get('revision-selection')
+  status.textContent = paragraph ? `원고 ${formatNumber.format(paragraph.start + 1)}–${formatNumber.format(paragraph.end)}자 · 선택한 문단 전체를 다듬어요.`
+    : '원고에서 퇴고할 한 문단의 일부를 선택해 주세요.'
+  if (paragraph) {
+    const { model, maxTokens, systemPrompt, ...context } = revisionBody(project, paragraph)
+    get('revision-estimate').textContent = estimate(completionPayload(model, maxTokens,
+      effectiveSystemPrompt(systemPrompt, defaultRevisionPrompt), context))
+  } else {
+    get('revision-estimate').textContent = ''
+  }
+  const { model, systemPrompt, ...memory } = memoryRequest(project)
+  get('memory-estimate').textContent = memory.excerpt.trim() ? estimate(completionPayload(model, memoryOutputLimit,
+    effectiveSystemPrompt(systemPrompt, defaultMemoryPrompt), memory)) + ' · 다음 메모 요청' : ''
+}
+
+function closeRequestPreview() {
+  activePreview?.abort()
+  activePreview = undefined
+  get('request-preview').hidden = true
+}
+
+function writingInputsChanged() {
+  closeRequestPreview()
+  research.renderState()
+  renderEstimates()
+  syncControls()
+}
+
+function goToPassage({ start, end, text }) {
+  if (manuscript.value.slice(start, end) !== text) return
+  manuscript.focus()
+  manuscript.setSelectionRange(start, end)
+  const style = getComputedStyle(manuscript)
+  const measure = document.createElement('div')
+  Object.assign(measure.style, {
+    position: 'fixed', visibility: 'hidden', width: `${manuscript.clientWidth}px`, whiteSpace: 'pre-wrap',
+    font: style.font, lineHeight: style.lineHeight, wordBreak: style.wordBreak, overflowWrap: style.overflowWrap,
+    letterSpacing: style.letterSpacing,
+  })
+  const marker = document.createElement('span')
+  marker.textContent = text.slice(0, 1)
+  measure.append(manuscript.value.slice(0, start), marker)
+  document.body.append(measure)
+  manuscript.scrollTop = marker.offsetTop - Math.floor(manuscript.clientHeight / 3)
+  measure.remove()
+}
+
+const research = setupResearch({ get, currentProject, saveWorkspace, onChange: writingInputsChanged, goToPassage })
+
+async function showRequestPreview() {
+  if (activePreview || activeRequest || activePlanRequest) return
+  const project = currentProject()
+  const controller = new AbortController()
+  activePreview = controller
+  syncControls()
+  const status = get('request-preview-status')
+  const data = get('request-preview-data')
+  get('request-preview').hidden = false
+  data.hidden = true
+  status.textContent = '전송할 내용을 준비하는 중이에요.'
+  get('request-preview-title').focus()
+  try {
+    const prepared = await research.prepare(project, controller.signal)
+    const payload = await jsonRequest('/api/write/preview', { body: prepared.body, signal: controller.signal })
+    controller.signal.throwIfAborted()
+    const blocks = [
+      ['시스템 프롬프트', payload.messages[0].content],
+      ...Object.entries(JSON.parse(payload.messages[1].content)).map(([key, value]) => [
+        ({ projectTitle: '작품 제목', direction: '작가의 노트', ...referenceLabels })[key], value,
+      ]),
+    ]
+    get('request-blocks').replaceChildren(...blocks.map(([label, value]) => {
+      const details = document.createElement('details')
+      const summary = document.createElement('summary')
+      summary.textContent = label
+      const contents = document.createElement('pre')
+      contents.textContent = value || '(비어 있음)'
+      details.append(summary, contents)
+      return details
+    }))
+    research.renderResults(prepared)
+    const value = estimate(payload)
+    get('request-preview-estimate').textContent = value
+    get('writing-estimate').textContent = value
+    get('request-json').textContent = JSON.stringify(payload, null, 2)
+    status.textContent = `OpenRouter에 보낼 순서 · ${payload.model}`
+    data.hidden = false
+  } catch (error) {
+    if (!controller.signal.aborted) status.textContent = completionFailure(error, controller.signal)
+  } finally {
+    if (activePreview === controller) activePreview = undefined
+    syncControls()
+  }
+}
+
+async function generateDraft(revision) {
+  if (activeRequest || activePlanRequest) return
+  const project = currentProject()
+  const preview = {
+    original: project.manuscript, revision, text: '', model: '', note: project.direction, authorMode: project.authorMode,
+    status: revision ? '수정안을 준비하는 중이에요.' : '전송할 원고와 자료를 준비하는 중이에요.',
+  }
+  previews.set(project.id, preview)
+
+  const controller = new AbortController()
+  activeRequest = controller
+  syncControls()
+  renderProposal()
+  get('proposal-title').focus()
+  const output = document.createTextNode('')
+  proposalBody.replaceChildren(output)
+
+  try {
+    const body = revision ? revisionBody(project, revision) : (await research.prepare(project, controller.signal)).body
+    const result = await requestCompletion(revision ? '/api/revise' : '/api/write', body, {
+      signal: controller.signal,
+      onText(content) {
+        if (!preview.text.trim()) {
+          proposalBody.hidden = false
+          preview.status = '초안을 작성하고 있어요.'
+          updateProposalActions()
+        }
+        preview.text += content
+        output.appendData(content)
+      },
+    })
+    preview.model = result.model ?? body.model
+    preview.usage = result.usage
+    preview.complete = !result.truncated
+    preview.status = result.truncated ? '토큰 한도에 도달했어요. 끝 문장을 확인해 주세요.'
+      : revision ? '기존 문단과 비교하고 교체 여부를 선택하세요.' : '원고에 추가할 초안을 확인해 주세요.'
+  } catch (error) {
+    preview.status = completionFailure(error, controller.signal)
+  } finally {
+    activeRequest = undefined
+    syncControls()
+    renderProposal()
+    if (document.activeElement === document.body) get('proposal-title').focus()
+  }
+}
+
+function completionFailure(error, signal) {
+  if (signal.aborted) return '생성을 중지했어요.'
+  if (error?.name === 'AbortError') return '요청을 준비하는 동안 원고나 설정이 바뀌었어요. 다시 요청해 주세요.'
+  if (error instanceof TypeError) return '서버와 연결이 끊겼어요. 다시 시도해 주세요.'
+  if (error instanceof SyntaxError) return '서버 응답을 읽지 못했어요. 다시 시도해 주세요.'
+  return error.message
+}
+
+function renderMemory() {
+  const project = currentProject()
+  const job = memoryJobs.get(project)
+  const through = memoryReadThrough(project)
+  const remaining = project.manuscript.length - through
+  const running = Boolean(job?.controller)
+  const hasManuscript = Boolean(project.manuscript.trim())
+  const text = memoryForPrompt(project)
+
+  memoryAuto.checked = Boolean(project.autoMemory)
+  memoryRefresh.disabled = running || !hasManuscript || remaining === 0
+  memoryStop.hidden = !running
+  get('memory-content').hidden = !text
+  if (memoryText.value !== text) memoryText.value = text
+  get('memory-usage').textContent = job?.usage ? usageLabel(job.usage) : ''
+
+  const message = running ? `${formatNumber.format(through)}자까지 읽었어요. 원고를 읽고 있어요.`
+    : job?.error || (!hasManuscript ? '원고가 준비되면 메모를 갱신할 수 있어요.'
+      : project.manuscriptMemory?.stale ? '이미 읽은 부분이 바뀌었어요. 처음부터 다시 읽으려면 갱신하기를 누르세요.'
+      : remaining ? `아직 메모에 반영할 원고가 ${formatNumber.format(remaining)}자 남았어요.`
+      : '현재 원고까지 갱신했어요.')
+  if (memoryStatus.textContent !== message) memoryStatus.textContent = message
+  const short = running ? '갱신 중…' : job?.error ? '갱신 중단'
+    : project.manuscriptMemory && remaining ? '갱신 필요' : text ? '갱신 완료' : ''
+  if (memoryShortStatus.textContent !== short) memoryShortStatus.textContent = short
+}
+
+async function refreshProjectMemory(project) {
+  const pending = memoryJobs.get(project)
+  if (pending?.controller) {
+    pending.requestedManuscript = project.manuscript
+    return
+  }
+  if (!project.manuscript.trim() || memoryReadThrough(project) === project.manuscript.length) return
+
+  const controller = new AbortController()
+  const job = { controller, error: '', requestedManuscript: project.manuscript }
+  memoryJobs.set(project, job)
+  const refreshVisible = () => { if (project === currentProject()) renderMemory() }
+  refreshVisible()
+
+  try {
+    let snapshot
+    do {
+      snapshot = job.requestedManuscript
+      await updateManuscriptMemory(project, snapshot, controller.signal, () => {
+        if (!saveWorkspace()) throw new Error('메모를 브라우저에 저장할 수 없어 갱신을 멈췄어요.')
+        refreshVisible()
+        if (project === currentProject()) writingInputsChanged()
+      }, usage => {
+        job.usage = combineUsage(job.usage, usage)
+        refreshVisible()
+      })
+    } while (snapshot !== job.requestedManuscript)
+  } catch (error) {
+    job.error = controller.signal.aborted ? '메모 갱신을 중지했어요.' : completionFailure(error, controller.signal)
+  } finally {
+    job.controller = null
+    refreshVisible()
+    if (project === currentProject() && !get('notes-panel').hidden && memoryPanel.open &&
+        document.activeElement === document.body) memoryStatus.focus()
+  }
+}
+
+function currentPlan() {
+  const project = currentProject()
+  if (!plans.has(project)) plans.set(project, { target: 'synopsis', idea: '', draft: null })
+  return plans.get(project)
+}
+
+function renderPlanner() {
+  const plan = currentPlan()
+  planTarget.value = plan.target
+  planIdea.value = plan.idea
+  planIdea.placeholder = noteKinds[plan.target].placeholder
+  renderPlanDraft()
+}
+
+function renderPlanDraft() {
+  const draft = currentPlan().draft
+  get('note-draft').hidden = !draft
+  if (!draft) return
+  get('note-draft-title').textContent = `${noteKinds[draft.target].label} 초안`
+  planDraftText.maxLength = writingFields[draft.target]
+  planDraftText.hidden = !draft.text
+  planDraftText.value = draft.text
+}
+
+function updatePlanControls() {
+  const { draft } = currentPlan()
+  const planning = Boolean(activePlanRequest)
+  planTarget.disabled = planning
+  planIdea.readOnly = planning
+  planGenerate.disabled = Boolean(activeRequest || activePlanRequest)
+  planGenerate.textContent = planning ? '작성 중…' : draft?.text ? '새 초안 만들기' : '초안 만들기'
+  if (!draft) return
+
+  const tooLong = !planning && appendParagraphs(currentProject()[draft.target] ?? '', draft.text.trim()).length > writingFields[draft.target]
+  const message = tooLong ? '메모에 추가하려면 기존 메모나 초안의 길이를 줄여 주세요.' : draft.status
+  const status = get('note-draft-status')
+  if (status.textContent !== message) status.textContent = message
+  planDraftText.readOnly = planning
+  get('plan-stop').hidden = !planning
+  get('plan-discard').hidden = planning
+  planAccept.hidden = planning
+  planAccept.disabled = planning || tooLong || !draft.text.trim()
+}
+
+async function generateNoteDraft() {
+  if (activeRequest || activePlanRequest) return
+  const project = currentProject()
+  const plan = currentPlan()
+  const draft = { target: plan.target, text: '', status: '작품 메모를 참고해 초안을 작성하고 있어요.' }
+  plan.draft = draft
+  const controller = new AbortController()
+  activePlanRequest = controller
+  renderPlanDraft()
+  syncControls()
+  get('note-draft-title').focus()
+
+  try {
+    const result = await requestCompletion('/api/plan', {
+      model: project.model,
+      maxTokens: project.maxTokens,
+      target: draft.target,
+      idea: plan.idea.trim(),
+      systemPrompt: project.notePrompts?.[draft.target],
+      notes: {
+        projectTitle: project.title,
+        synopsis: project.synopsis,
+        characterNotes: project.characterNotes ?? '',
+        worldNotes: project.worldNotes,
+        manuscriptMemory: memoryForPrompt(project),
+      },
+    }, {
+      signal: controller.signal,
+      onText(content) {
+        draft.text += content
+        planDraftText.hidden = false
+        planDraftText.value = draft.text
+      },
+    })
+    draft.status = result.truncated ? '토큰 한도에 도달했어요. 끝부분을 확인해 주세요.' : '초안을 편집한 뒤 메모에 추가할 수 있어요.'
+  } catch (error) {
+    draft.status = completionFailure(error, controller.signal)
+  } finally {
+    activePlanRequest = undefined
+    syncControls()
+    if (document.activeElement === document.body && notePlanner.open && !get('notes-panel').hidden) {
+      get('note-draft-title').focus()
+    }
+  }
+}
+
+function bindField(id, update) {
+  const field = get(id)
+  field.addEventListener('input', () => {
+    update(field.value)
+    saveWorkspace()
+    writingInputsChanged()
+  })
+}
+
+function currentPromptDefault() {
+  const target = promptTarget.value
+  if (target === 'continuation') return defaultSystemPrompt
+  if (target === 'memory') return defaultMemoryPrompt
+  return target === 'revision' ? defaultRevisionPrompt : defaultNoteSystemPrompt(target)
+}
+
+function renderPromptEditor() {
+  const project = currentProject()
+  const target = promptTarget.value
+  const value = target === 'continuation' ? project.systemPrompt : project.notePrompts?.[target]
+  systemPrompt.value = value ?? currentPromptDefault()
+  systemPrompt.scrollTop = 0
+  updatePromptControls()
+}
+
+function setPromptOverride(value) {
+  const project = currentProject()
+  const target = promptTarget.value
+  if (target === 'continuation') {
+    project.systemPrompt = value
+  } else {
+    project.notePrompts ??= {}
+    project.notePrompts[target] = value
+  }
+}
+
+function updatePromptControls() {
+  resetSystemPrompt.disabled = systemPrompt.value === currentPromptDefault()
+  get('system-prompt-status').textContent = ''
+}
+
+function showNoteStatus(id, message = '', isError = false) {
+  const status = get(`${id}-status`)
+  status.hidden = !message
+  status.dataset.error = String(isError)
+  status.textContent = message
+}
+
+async function readNoteFile(file) {
+  if (!/\.(txt|md|markdown)$/i.test(file.name)) {
+    throw new Error('TXT 또는 Markdown 파일을 선택해 주세요.')
+  }
+  const bytes = new Uint8Array(await file.arrayBuffer())
+  const encodings = bytes[0] === 0xff && bytes[1] === 0xfe ? ['utf-16le']
+    : bytes[0] === 0xfe && bytes[1] === 0xff ? ['utf-16be']
+    : bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf ? ['utf-8']
+    : ['utf-8', 'euc-kr']
+  let text
+  for (const encoding of encodings) {
+    try {
+      text = new TextDecoder(encoding, { fatal: true }).decode(bytes)
+      break
+    } catch {
+      // Try the next encoding for a file without a byte-order mark.
+    }
+  }
+  if (text === undefined || /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(text)) {
+    throw new Error('파일을 텍스트로 읽을 수 없어요. UTF-8로 저장한 뒤 다시 불러와 주세요.')
+  }
+  if (!text.trim()) throw new Error('내용이 있는 파일만 불러올 수 있어요.')
+  return normalizeLineEndings(text)
+}
+
+function bindNoteImport(id, key) {
+  const field = get(id)
+  const input = get(`${id}-file`)
+  const button = get(`${id}-import`)
+  const limit = writingFields[key]
+  const sizeError = `메모는 총 ${formatNumber.format(limit)}자까지 담을 수 있어요. 파일이나 기존 메모를 줄여 주세요.`
+  field.maxLength = limit
+  bindField(id, value => {
+    currentProject()[key] = value
+    showNoteStatus(id)
+    updatePlanControls()
+  })
+  button.addEventListener('click', () => input.click())
+  input.addEventListener('change', async () => {
+    const files = Array.from(input.files)
+    input.value = ''
+    if (!files.length) return
+
+    const project = currentProject()
+    button.disabled = true
+    showNoteStatus(id, '파일을 읽는 중이에요.')
+    try {
+      const bytes = files.reduce((sum, file) => sum + file.size, 0)
+      if (bytes > limit * 4 + files.length * 3) throw new Error(sizeError)
+      const texts = await Promise.all(files.map(readNoteFile))
+      const value = [project[key] ?? '', ...texts].filter(Boolean).join('\n\n')
+      if (value.length > limit) throw new Error(sizeError)
+      project[key] = value
+      if (project === currentProject()) {
+        field.value = value
+        showNoteStatus(id, `파일 ${formatNumber.format(files.length)}개를 불러왔어요.`)
+        updatePlanControls()
+        writingInputsChanged()
+      }
+      saveWorkspace()
+    } catch (error) {
+      if (project === currentProject()) {
+        const message = error instanceof DOMException
+          ? '파일을 열 수 없어요. 다시 선택해 주세요.' : error.message
+        showNoteStatus(id, message, true)
+      }
+    } finally {
+      button.disabled = false
+    }
+  })
+}
+
+bindField('project-title', value => {
+  const project = currentProject()
+  project.title = value
+  projectSelect.selectedOptions[0].textContent = projectName(project)
+  get('active-project-name').textContent = projectName(project)
+})
+bindField('manuscript', value => {
+  setManuscriptText(currentProject(), value)
+  updateCharacterCount()
+  updateProposalActions()
+  renderMemory()
+})
+bindField('direction', value => { currentProject().direction = value })
+get('author-mode').addEventListener('change', event => {
+  currentProject().authorMode = event.target.value
+  saveWorkspace()
+  writingInputsChanged()
+})
+for (const event of ['select', 'mouseup', 'keyup']) manuscript.addEventListener(event, updateRevision)
+get('open-revision').addEventListener('click', () => {
+  updateRevision()
+  switchPanel('generate')
+  get('revision').open = true
+  get('revision').querySelector('summary').focus()
+})
+get('revision-direction').addEventListener('input', renderEstimates)
+get('generate-revision').addEventListener('click', () => {
+  const paragraph = selectedRevision()
+  if (paragraph) generateDraft(paragraph)
+})
+get('preview-request').addEventListener('click', showRequestPreview)
+get('close-request-preview').addEventListener('click', () => {
+  closeRequestPreview()
+  syncControls()
+  switchPanel('generate')
+  get('preview-request').focus()
+})
+get('open-memory').addEventListener('click', () => {
+  switchPanel('notes')
+  memoryPanel.open = true
+  memoryPanel.querySelector('summary').focus()
+})
+memoryAuto.addEventListener('change', () => {
+  currentProject().autoMemory = memoryAuto.checked
+  saveWorkspace()
+})
+memoryRefresh.addEventListener('click', () => {
+  refreshProjectMemory(currentProject())
+  memoryStatus.focus()
+})
+memoryStop.addEventListener('click', () => memoryJobs.get(currentProject())?.controller?.abort())
+for (const [id, key] of Object.entries(noteFields)) bindNoteImport(id, key)
+planTarget.replaceChildren(...Object.entries(noteKinds).map(([key, kind]) => new Option(kind.label, key)))
+promptTarget.append(...Object.entries(noteKinds).map(([key, kind]) => new Option(`${kind.label} 도우미`, key)))
+promptTarget.addEventListener('change', renderPromptEditor)
+get('edit-plan-prompt').addEventListener('click', () => {
+  promptTarget.value = currentPlan().target
+  renderPromptEditor()
+  switchPanel('prompt')
+  systemPrompt.focus()
+})
+planIdea.maxLength = noteIdeaLimit
+planTarget.addEventListener('change', () => {
+  currentPlan().target = planTarget.value
+  planIdea.placeholder = noteKinds[planTarget.value].placeholder
+})
+planIdea.addEventListener('input', () => { currentPlan().idea = planIdea.value })
+get('note-planner-form').addEventListener('submit', event => {
+  event.preventDefault()
+  generateNoteDraft()
+})
+get('plan-stop').addEventListener('click', () => activePlanRequest?.abort())
+planDraftText.addEventListener('input', () => {
+  const { draft } = currentPlan()
+  if (!draft || activePlanRequest) return
+  draft.text = planDraftText.value
+  updatePlanControls()
+})
+get('plan-discard').addEventListener('click', () => {
+  currentPlan().draft = null
+  renderPlanDraft()
+  updatePlanControls()
+  planGenerate.focus()
+})
+planAccept.addEventListener('click', () => {
+  const plan = currentPlan()
+  const { draft } = plan
+  if (!draft || activePlanRequest || planAccept.disabled) return
+  const project = currentProject()
+  const text = appendParagraphs(project[draft.target] ?? '', draft.text.trim())
+  project[draft.target] = text
+  const fieldId = Object.keys(noteFields).find(id => noteFields[id] === draft.target)
+  const field = get(fieldId)
+  field.value = text
+  plan.draft = null
+  renderPlanDraft()
+  updatePlanControls()
+  saveWorkspace()
+  writingInputsChanged()
+  notePlanner.open = false
+  showNoteStatus(fieldId, '초안을 메모에 추가했어요.')
+  field.focus()
+  field.setSelectionRange(text.length, text.length)
+  field.scrollTop = field.scrollHeight
+})
+systemPrompt.maxLength = systemPromptLimit
+bindField('system-prompt', value => {
+  setPromptOverride(value === currentPromptDefault() ? undefined : value)
+  updatePromptControls()
+})
+resetSystemPrompt.addEventListener('click', () => {
+  setPromptOverride(undefined)
+  renderPromptEditor()
+  systemPrompt.setSelectionRange(0, 0)
+  saveWorkspace()
+  writingInputsChanged()
+  systemPrompt.focus()
+  get('system-prompt-status').textContent = '기본 시스템 프롬프트를 복원했어요.'
+})
+modelSelect.addEventListener('change', () => {
+  currentProject().model = modelSelect.value
+  updateModelPrice()
+  saveWorkspace()
+  writingInputsChanged()
+})
+for (const purpose of ['memory', 'revision']) {
+  get(`${purpose}-model`).addEventListener('change', event => {
+    const project = currentProject()
+    if (event.target.value) project[`${purpose}Model`] = event.target.value
+    else delete project[`${purpose}Model`]
+    saveWorkspace()
+    writingInputsChanged()
+  })
+}
+limitSelect.addEventListener('change', () => {
+  currentProject().maxTokens = Number(limitSelect.value)
+  saveWorkspace()
+  writingInputsChanged()
+})
+
+projectSelect.addEventListener('change', () => {
+  workspace.activeProjectId = projectSelect.value
+  renderWorkspace()
+  saveWorkspace()
+})
+get('add-project').addEventListener('click', () => {
+  const project = makeProject()
+  workspace.projects.push(project)
+  workspace.activeProjectId = project.id
+  renderWorkspace()
+  saveWorkspace()
+  switchPanel('notes')
+  projectTitle.focus()
+  projectTitle.select()
+})
+for (const button of document.querySelectorAll('[data-panel]')) {
+  button.addEventListener('click', () => switchPanel(button.dataset.panel))
+}
+get('generate-panel').addEventListener('submit', event => {
+  event.preventDefault()
+  generateDraft()
+})
+stop.addEventListener('click', () => activeRequest?.abort())
+discard.addEventListener('click', () => {
+  previews.delete(currentProject().id)
+  renderProposal()
+  manuscript.focus()
+})
+accept.addEventListener('click', () => {
+  const project = currentProject()
+  const preview = previews.get(project.id)
+  if (!preview || activeRequest || accept.disabled) return
+  const text = normalizeLineEndings(preview.text.trim())
+  const revision = preview.revision
+  if (revision && project.manuscript.slice(revision.start, revision.end) !== revision.text) return
+  const updated = revision
+    ? project.manuscript.slice(0, revision.start) + text + project.manuscript.slice(revision.end)
+    : appendParagraphs(project.manuscript, text)
+  setManuscriptText(project, updated)
+  if (!revision && preview.authorMode === 'once' && project.authorMode === 'once' && project.direction === preview.note) {
+    project.direction = ''
+    get('direction').value = ''
+  }
+  revisionSelection = undefined
+  manuscript.value = project.manuscript
+  previews.delete(project.id)
+  renderProposal()
+  updateCharacterCount()
+  saveWorkspace()
+  renderMemory()
+  writingInputsChanged()
+  manuscript.focus()
+  if (revision) goToPassage({ start: revision.start, end: revision.start + text.length, text })
+  else {
+    manuscript.setSelectionRange(updated.length, updated.length)
+    manuscript.scrollTop = manuscript.scrollHeight
+    if (project.autoMemory) refreshProjectMemory(project)
+  }
+})
+function download(content, extension, type) {
+  const title = projectName(currentProject()).replace(/[<>:"/\\|?*]/g, '_')
+  const url = URL.createObjectURL(new Blob([content], { type }))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `${title}.${extension}`
+  link.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+const filesDialog = get('files-dialog')
+const fileStatus = message => { get('files-status').textContent = message }
+const packOptions = () => ({ lorebook: get('pack-lore').checked, prompts: get('pack-prompts').checked })
+const downloadJson = (value, extension) => download(JSON.stringify(value, null, 2), extension, 'application/json;charset=utf-8')
+get('open-files').addEventListener('click', () => {
+  fileStatus('')
+  filesDialog.showModal()
+})
+get('export-project').addEventListener('click', () => {
+  const project = currentProject()
+  download([projectName(project), project.manuscript].filter(Boolean).join('\n\n'), 'txt', 'text/plain;charset=utf-8')
+})
+get('download-backup').addEventListener('click', () => downloadJson(exportProject(currentProject()), 'relay.json'))
+get('download-pack').addEventListener('click', () => {
+  try { downloadJson(exportPack(currentProject(), packOptions()), 'relay-settings.json') }
+  catch (error) { fileStatus(error.message) }
+})
+
+function bindProjectImport(action, read, apply) {
+  const input = get(`${action}-file`)
+  const button = get(action)
+  button.addEventListener('click', () => input.click())
+  input.addEventListener('change', async () => {
+    const file = input.files[0]
+    input.value = ''
+    if (!file) return
+    const project = currentProject()
+    const options = packOptions()
+    button.disabled = true
+    try {
+      const imported = read(await file.text(), options)
+      if (activeRequest || activePlanRequest || project !== currentProject()) throw new Error('작품 상태가 바뀌었어요. 다시 불러와 주세요.')
+      const success = apply(imported, project)
+      renderWorkspace()
+      fileStatus(saveWorkspace() ? success : '불러왔지만 브라우저에 저장할 수 없어요.')
+    } catch (error) {
+      fileStatus(error.message)
+    } finally {
+      button.disabled = false
+    }
+  })
+}
+bindProjectImport('restore-backup', readProject, restored => {
+  workspace.projects.push(restored)
+  workspace.activeProjectId = restored.id
+  return `‘${projectName(restored)}’을 새 작품으로 복원했어요.`
+})
+bindProjectImport('import-pack', readPack, (settings, project) => {
+  Object.assign(project, settings)
+  return `‘${projectName(project)}’에 선택한 설정을 적용했어요.`
+})
+window.addEventListener('storage', event => {
+  if (event.key === storageKey || event.key === null) {
+    storageWarning = '다른 탭에서 작품을 수정했어요. 이 탭의 원고를 내보내거나 새로고침해 주세요.'
+    showStorageStatus()
+  }
+})
+get('refresh-catalog').addEventListener('click', loadCatalog)
+renderWorkspace()
+saveWorkspace()
+loadCatalog()

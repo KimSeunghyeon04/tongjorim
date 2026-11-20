@@ -1,0 +1,116 @@
+import assert from 'node:assert/strict'
+import { test } from 'node:test'
+import { exportPack, exportProject, readPack, readProject } from '../public/project-files.mjs'
+import { activeLore, chunkManuscript, retrievalInput, searchPast } from '../public/retrieval.mjs'
+import { actualUsage, combineUsage, estimateUsage } from '../public/request-tools.mjs'
+import { manuscript, passages, queries } from './retrieval-fixture.mjs'
+
+test('한국어 로어북 조사와 이름 경계, 별칭, 우선순위와 입력 한도', () => {
+  const card = { id: '1', kind: 'character', name: '나래', aliases: ['종잡이'], description: '문지기', priority: 31, always: false }
+  assert.deepEqual(activeLore([card], '나래이션은 끝났다.', '').included, [])
+  assert.deepEqual(activeLore([card], '나래는 기다렸다.', '종잡이에게 물어').included[0].keywords, ['나래', '종잡이'])
+  const longCards = [1, 8, 5, 7].map(priority => ({ ...card, id: String(priority), name: `카드 ${priority}`,
+    always: true, priority, description: '긴'.repeat(1800) }))
+  const result = activeLore(longCards, '', '')
+  assert.deepEqual(result.included.map(item => item.priority), [8, 7])
+  assert.equal(result.text, `[인물] 카드 8\n${'긴'.repeat(1800)}\n\n[인물] 카드 7\n${'긴'.repeat(1800)}`)
+})
+
+test('긴 문단을 순서와 위치를 보존해 나누고 최근 원고와 경계가 겹치는 조각은 제외', () => {
+  const sentence = '비가 그쳤다. '
+  const long = sentence.repeat(160).trim()
+  const text = `앞 문단\r\n\r\n${long}\n\n뒤 문단`
+  const chunks = chunkManuscript(text)
+  assert.equal(chunks.length, 4)
+  assert.equal(chunks[0].text, '앞 문단')
+  assert.equal(chunks.at(-1).text, '뒤 문단')
+  assert.equal(chunks.slice(1, -1).map(chunk => chunk.text).join(''), long)
+  assert(chunks.slice(1, -1).every(chunk => chunk.text.length >= 500 && chunk.text.length <= 900))
+  assert(chunks.slice(1, -2).every(chunk => chunk.text.trimEnd().endsWith('.')))
+  for (const { start, end, text: excerpt } of chunks) assert.equal(text.slice(start, end), excerpt)
+  const research = retrievalInput(manuscript, '검색', true)
+  for (const row of queries.filter(item => item.answer)) {
+    const target = research.chunks.find(chunk => chunk.text === passages[row.answer])
+    assert(target && target.end < manuscript.length - 18000)
+  }
+  assert(research.chunks.every(chunk => chunk.end <= manuscript.length - 18000))
+  assert.equal(research.query, '검색\n문이 열린 뒤 두 사람은 말없이 마당으로 걸어 나왔다.')
+})
+
+test('최근 원고를 끄면 검색어에서 빠지고 과거 원문 범위는 유지된다', () => {
+  const manuscript = `앞 문단.\n\n${'끝'.repeat(17_998)}`
+  const older = [{ start: 0, end: 5, text: '앞 문단.' }]
+  assert.deepEqual(retrievalInput(manuscript, '검색', true), {
+    query: `검색\n${'끝'.repeat(240)}`, intent: '검색', chunks: older,
+  })
+  assert.deepEqual(retrievalInput(manuscript, '검색', false), { query: '검색', intent: '검색', chunks: older })
+  assert.deepEqual(retrievalInput(manuscript.slice(0, -1), '검색', false).chunks, [])
+  assert.deepEqual(retrievalInput('앞 문단.', '검색', false), { query: '검색', intent: '검색', chunks: [] })
+})
+
+test('BM25/RRF 정답 기준은 임베딩을 끄거나 순위를 뒤집으면 실패한다', () => {
+  const keys = ['fox', 'elevator', 'sailor']
+  const sourceVectors = new Map(keys.map((key, i) => [passages[key], keys.map((_, n) => i === n ? 1 : 0)]))
+  const metrics = { exact: 0, semantic: 0, disabled: 0, inverted: 0, unrelatedHits: [] }
+  for (const row of queries) {
+    const { chunks, query, intent } = retrievalInput(manuscript, row.text, true)
+    const vectors = chunks.map(chunk => sourceVectors.get(chunk.text) ?? [0, 0, 0])
+    const vector = sourceVectors.get(passages[row.answer]) ?? [0, 0, 0]
+    const hits = searchPast(chunks, query, { query: vector, vectors }, intent)
+    const found = rows => rows.some(hit => hit.text === passages[row.answer])
+    if (row.kind === 'exact') metrics.exact += Number(found(hits) && found(searchPast(chunks, query, null, intent)))
+    if (row.kind === 'semantic') {
+      metrics.semantic += Number(found(hits))
+      metrics.disabled += Number(found(searchPast(chunks, query, null, intent)))
+      metrics.inverted += Number(found(searchPast(chunks, query, { query: vector.map(value => -value), vectors }, intent)))
+    }
+    if (row.kind === 'unrelated') metrics.unrelatedHits.push(hits.length)
+    assert(hits.length <= 3 && hits.every(a => hits.every(b => a === b || a.end <= b.start || b.end <= a.start)))
+  }
+  assert.deepEqual(metrics, { exact: 3, semantic: 3, disabled: 0, inverted: 0, unrelatedHits: [0, 0] })
+  const short = [{ start: 0, end: 9, text: '나래는 돌아왔다.' }, { start: 11, end: 17, text: '나래이션이다.' }]
+  assert.equal(searchPast(short, '나래', null, '나래')[0].text, '나래는 돌아왔다.')
+  assert.equal(searchPast(short, '나래', null, '나래').length, 1)
+})
+
+test('백업 형식, 복원 ID, AI 메모 위치와 선택 설정', () => {
+  const project = {
+    id: 'original', title: '저편', manuscript: '나래가 도착했다.', direction: '문을 열어', authorMode: 'once',
+    synopsis: '줄거리', worldNotes: '세계관', characterNotes: '인물', model: 'qa/write', maxTokens: 1024,
+    memoryModel: 'qa/memory', revisionModel: 'qa/revision', search: { enabled: false, model: 'qa/embedding' },
+    systemPrompt: '이어쓰기 지시', notePrompts: { revision: '퇴고 지시', memory: '메모 지시' },
+    autoMemory: true, manuscriptMemory: { text: '도착함', through: 9, stale: false }, lorebook: [],
+  }
+  const backup = exportProject({ ...project, apiKey: 'secret' })
+  const restored = readProject(JSON.stringify(backup))
+  assert.notEqual(restored.id, project.id)
+  assert.deepEqual({ ...restored, id: project.id }, project)
+  assert.equal(Object.hasOwn(backup.project, 'apiKey'), false)
+  assert.throws(() => readProject(JSON.stringify({ ...backup, version: 999 })), /버전/)
+  assert.throws(() => readProject(JSON.stringify({ ...backup, project: { ...backup.project,
+    manuscriptMemory: { text: '도착', through: 100, stale: false },
+  } })), /형식/)
+  const pack = exportPack(project, { lorebook: true, prompts: true })
+  assert.deepEqual(readPack(JSON.stringify(pack), { lorebook: true, prompts: false }), { lorebook: [] })
+  assert.equal(readPack(JSON.stringify(pack), { lorebook: false, prompts: true }).notePrompts.revision, '퇴고 지시')
+})
+
+test('백업 복원 시 원고 줄바꿈과 AI 메모가 읽은 위치를 함께 변환한다', () => {
+  const project = {
+    id: 'original', title: '저편', synopsis: '', worldNotes: '', model: 'qa/write', maxTokens: 1024, direction: '',
+    manuscript: '가\r\n나\r다\r\n\r\n라', manuscriptMemory: { text: '가, 나, 다', through: 6, stale: false },
+  }
+  const restored = readProject(JSON.stringify(exportProject(project)))
+  assert.equal(restored.manuscript, '가\n나\n다\n\n라')
+  assert.deepEqual(restored.manuscriptMemory, { text: '가, 나, 다', through: 5, stale: false })
+  assert.equal(restored.manuscript.slice(restored.manuscriptMemory.through), '\n\n라')
+})
+
+test('요청 기본료와 입력·출력 요금 계산, 값이 비어 있으면 확인 불가', () => {
+  assert.deepEqual(estimateUsage(['네글자', '12345'], 4, { input: 2, output: 3, request: 7 }, 2),
+    { inputTokens: 5, outputTokens: 4, cost: 36 })
+  assert.equal(estimateUsage(['abc'], 4, { input: 2, request: 7 }).cost, null)
+  const first = actualUsage({ prompt_tokens: 5, completion_tokens: 3, total_tokens: 8, cost: 0 })
+  const second = actualUsage({ prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 })
+  assert.deepEqual(combineUsage(first, second), { inputTokens: 7, outputTokens: 4, totalTokens: 11, cost: null })
+})
