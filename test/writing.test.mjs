@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import { exportPack, exportProject, readPack, readProject } from '../public/project-files.mjs'
 import { activeLore, chunkManuscript, retrievalInput, searchPast } from '../public/retrieval.mjs'
 import { actualUsage, combineUsage, estimateUsage } from '../public/request-tools.mjs'
+import { projectNotesForRequest, writingFieldPrefix } from '../public/writing-config.mjs'
 import { manuscript, passages, queries } from './retrieval-fixture.mjs'
 
 test('한국어 로어북 조사와 이름 경계, 별칭, 우선순위와 입력 한도', () => {
@@ -73,6 +74,18 @@ test('BM25/RRF 정답 기준은 임베딩을 끄거나 순위를 뒤집으면 �
   assert.equal(searchPast(short, '나래', null, '나래').length, 1)
 })
 
+test('과거 문단이 하나여도 세 글자 이름을 조사와 단어 경계로 찾는다', () => {
+  const exact = '서하린은 낡은 표를 보관했다.'
+  const searchName = older => {
+    const { chunks, query, intent } = retrievalInput(`${older}\n\n${'끝'.repeat(18_000)}`, '서하린', true)
+    assert.equal(chunks.length, 1)
+    return searchPast(chunks, query, undefined, intent).map(hit => hit.text)
+  }
+  assert.deepEqual(searchName(exact), [exact])
+  assert.deepEqual(searchName('서하린상자에 표를 보관했다.'), [])
+  assert.deepEqual(searchName('박서하린은 낡은 표를 보관했다.'), [])
+})
+
 test('백업 형식, 복원 ID, AI 메모 위치와 선택 설정', () => {
   const project = {
     id: 'original', title: '저편', manuscript: '나래가 도착했다.', direction: '문을 열어', authorMode: 'once',
@@ -104,6 +117,22 @@ test('백업 복원 시 원고 줄바꿈과 AI 메모가 읽은 위치를 함께
   assert.equal(restored.manuscript, '가\n나\n다\n\n라')
   assert.deepEqual(restored.manuscriptMemory, { text: '가, 나, 다', through: 5, stale: false })
   assert.equal(restored.manuscript.slice(restored.manuscriptMemory.through), '\n\n라')
+})
+
+test('복원된 메모의 원본을 보존하고 AI 요청에는 필드 한도까지 담는다', () => {
+  const project = {
+    id: 'original', title: '제'.repeat(121), model: 'qa/write', maxTokens: 1024, manuscript: '',
+    synopsis: '줄'.repeat(8000) + '끝', characterNotes: '인물 관계', worldNotes: '세'.repeat(11_999) + '📚',
+    direction: ' '.repeat(1200) + '다음 장면',
+  }
+  const restored = readProject(JSON.stringify(exportProject(project)))
+  assert.deepEqual({ ...restored, id: project.id }, project)
+  assert.deepEqual(projectNotesForRequest(restored), {
+    projectTitle: '제'.repeat(120), synopsis: '줄'.repeat(8000), characterNotes: '인물 관계', worldNotes: '세'.repeat(11_999),
+  })
+  assert.equal(writingFieldPrefix('direction', restored.direction), '다음 장면')
+  assert.equal(writingFieldPrefix('direction', '|' + '가'.repeat(1199)), '|' + '가'.repeat(1199))
+  assert.deepEqual({ ...restored, id: project.id }, project)
 })
 
 test('요청 기본료와 입력·출력 요금 계산, 값이 비어 있으면 확인 불가', () => {

@@ -143,18 +143,17 @@ async function readWritingRequest(req) {
   context.previousScenes ??= ''
   context.lorebook ??= ''
   context.pastPassages ??= ''
-  if (typeof model !== 'string' || model.length > 200 || !modelIdPattern.test(model) ||
-      !writingTokenLimits.includes(maxTokens) ||
-      !Object.entries(writingFields).every(([field, limit]) =>
-        typeof context[field] === 'string' && context[field].length <= limit)) {
-    throw new RequestError(400, '모델, 생성 한도와 원고 설정을 확인해 주세요.')
-  }
-  const prompt = resolveSystemPrompt(systemPrompt, defaultSystemPrompt)
   if (references !== undefined && (!Array.isArray(references) || references.length > defaultReferences.length ||
       new Set(references).size !== references.length || references.some(field => !defaultReferences.includes(field)))) {
     throw new RequestError(400, '참고 자료의 종류와 순서를 확인해 주세요.')
   }
   const included = orderedWritingContext(context, references)
+  if (typeof model !== 'string' || model.length > 200 || !modelIdPattern.test(model) ||
+      !writingTokenLimits.includes(maxTokens) ||
+      !Object.entries(included).every(([field, text]) => typeof text === 'string' && text.length <= writingFields[field])) {
+    throw new RequestError(400, '모델, 생성 한도와 원고 설정을 확인해 주세요.')
+  }
+  const prompt = resolveSystemPrompt(systemPrompt, defaultSystemPrompt)
   if (!Object.entries(included).some(([field, text]) => field !== 'projectTitle' && text.trim())) {
     throw new RequestError(400, '원고, 작품 메모, 또는 이어쓰기 지시를 먼저 입력해 주세요.')
   }

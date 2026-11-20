@@ -37,6 +37,14 @@ export function orderedWritingContext(context, references) {
   return Object.fromEntries(['projectTitle', 'direction', ...references].map(field => [field, context[field]]))
 }
 
+export function writingFieldPrefix(field, text) {
+  const limit = writingFields[field]
+  if (text.length <= limit) return text
+  const prefix = text.trimStart().slice(0, limit)
+  const last = prefix.charCodeAt(prefix.length - 1)
+  return last >= 0xd800 && last <= 0xdbff ? prefix.slice(0, -1) : prefix
+}
+
 export function completionPayload(model, maxTokens, systemPrompt, context) {
   return {
     model,
@@ -67,6 +75,11 @@ export const noteKinds = {
     placeholder: '예: 안개가 끼는 날에만 열리는 항로. 이용 규칙과 어겼을 때의 대가를 정해 줘.',
     instruction: '시대와 장소, 세계의 규칙과 제약, 그것이 인물의 생활과 이야기의 갈등에 미치는 영향을 구체화하세요. 확정된 설정이 있으면 그 안에서 새 요소를 제안하세요.',
   },
+}
+
+export function projectNotesForRequest(project) {
+  const notes = Object.keys(noteKinds).map(field => [field, writingFieldPrefix(field, project[field] ?? '')])
+  return { projectTitle: writingFieldPrefix('projectTitle', project.title), ...Object.fromEntries(notes) }
 }
 
 export function defaultNoteSystemPrompt(target) {

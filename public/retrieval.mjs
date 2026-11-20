@@ -118,7 +118,8 @@ function bigrams(value) {
 function keywordRanking(chunks, query, intent) {
   const terms = bigrams(query)
   const intentTerms = bigrams(intent || query)
-  const shortName = intent && /^[\p{L}\p{N}]{2}$/u.test(intent) ? intent : null
+  const keyword = normalize(intent)
+  const singleWord = /^[\p{L}\p{N}]{2,}$/u.test(keyword)
   if (!terms.size || !chunks.length) return []
   const frequencies = new Map()
   const docs = chunks.map(chunk => {
@@ -148,8 +149,9 @@ function keywordRanking(chunks, query, intent) {
         score += weight
       }
     }
-    const exactShortName = shortName && intentHits === 1 && includesAlias(normalize(chunk.text), shortName)
-    return (intentHits >= 2 && intentScore >= 1.2) || exactShortName
+    const matches = (intentHits >= 2 && intentScore >= 1.2) ||
+      (singleWord && intentHits === intentTerms.size && includesAlias(normalize(chunk.text), keyword))
+    return matches
       ? [{ index, score: intentScore + Math.min(score / 4, intentScore / 4), chunk }]
       : []
   }).sort((a, b) => b.score - a.score || a.index - b.index)

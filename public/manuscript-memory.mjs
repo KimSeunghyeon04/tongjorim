@@ -1,5 +1,5 @@
 import { requestCompletion } from './completion.js'
-import { memoryExcerptLimit, writingFields } from './writing-config.mjs'
+import { memoryExcerptLimit, writingFieldPrefix, writingFields } from './writing-config.mjs'
 
 export function memoryReadThrough(project) {
   return project.manuscriptMemory?.stale ? 0 : project.manuscriptMemory?.through ?? 0
@@ -32,7 +32,7 @@ function excerptEnd(manuscript, start) {
 
 export function memoryRequest(project, snapshot = project.manuscript, through = memoryReadThrough(project), memory = memoryForPrompt(project)) {
   return {
-    model: modelFor(project, 'memory'), projectTitle: project.title, memory,
+    model: modelFor(project, 'memory'), projectTitle: writingFieldPrefix('projectTitle', project.title), memory,
     excerpt: snapshot.slice(through, excerptEnd(snapshot, through)), systemPrompt: project.notePrompts?.memory,
   }
 }

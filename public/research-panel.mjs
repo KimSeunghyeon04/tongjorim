@@ -3,7 +3,7 @@ import { memoryForPrompt } from './manuscript-memory.mjs'
 import { defaultReferenceSettings, validLoreCard } from './project-files.mjs'
 import { actualUsage, combineUsage, estimateLabel, jsonRequest, usageLabel } from './request-tools.mjs'
 import { activeLore, defaultEmbeddingModel, loreKinds, loreLimits, retrievalInput, searchPast } from './retrieval.mjs'
-import { referenceLabels, writingFields } from './writing-config.mjs'
+import { orderedWritingContext, projectNotesForRequest, referenceLabels, writingFieldPrefix, writingFields } from './writing-config.mjs'
 
 export const refsFor = project => project.references ?? defaultReferenceSettings()
 export const searchFor = project => project.search ?? { enabled: false, model: defaultEmbeddingModel }
@@ -11,17 +11,14 @@ export const searchFor = project => project.search ?? { enabled: false, model: d
 export function writingBody(project, references, lore, hits) {
   return {
     model: project.model, maxTokens: project.maxTokens, systemPrompt: project.systemPrompt, references,
-    draft: {
-      projectTitle: project.title,
-      direction: project.direction,
-      synopsis: project.synopsis,
-      characterNotes: project.characterNotes ?? '',
-      worldNotes: project.worldNotes,
+    draft: orderedWritingContext({
+      ...projectNotesForRequest(project),
+      direction: writingFieldPrefix('direction', project.direction),
       manuscriptMemory: memoryForPrompt(project),
-      manuscript: references.includes('manuscript') ? project.manuscript.slice(-writingFields.manuscript) : '',
+      manuscript: project.manuscript.slice(-writingFields.manuscript),
       lorebook: lore.text,
       pastPassages: hits.map(hit => hit.block).join('\n\n'),
-    },
+    }, references),
   }
 }
 
@@ -218,7 +215,7 @@ export function setupResearch({ get, currentProject, saveWorkspace, onChange, go
     cache.set(project, entry)
     const show = () => { if (project === currentProject()) renderState() }
     entry.promise = (async () => {
-      const { chunks, query, intent } = retrievalInput(entry.manuscript, entry.direction, entry.recent)
+      const { chunks, query, intent } = retrievalInput(entry.manuscript, writingFieldPrefix('direction', entry.direction), entry.recent)
       let semantic
       if (entry.enabled && chunks.length && query) {
         try {
@@ -275,12 +272,12 @@ export function setupResearch({ get, currentProject, saveWorkspace, onChange, go
 
   async function prepare(project, signal) {
     const references = refsFor(project).filter(ref => ref.enabled).map(ref => ref.key)
-    const lore = references.includes('lorebook') ? activeLore(project.lorebook ?? [], project.manuscript, project.direction)
-      : { text: '', included: [] }
+    const direction = writingFieldPrefix('direction', project.direction)
+    const lore = references.includes('lorebook') ? activeLore(project.lorebook ?? [], project.manuscript, direction) : { text: '', included: [] }
     const snapshot = writingBody(project, references, lore, [])
     const hits = await getHits(project, references, signal)
     signal.throwIfAborted()
-    snapshot.draft.pastPassages = hits.map(hit => hit.block).join('\n\n')
+    if (references.includes('pastPassages')) snapshot.draft.pastPassages = hits.map(hit => hit.block).join('\n\n')
     return { body: snapshot, lore: lore.included, hits, status: get('search-state').textContent }
   }
 

@@ -1,8 +1,8 @@
 import { freeModel, pricing, requestCompletion } from './completion.js'
 import {
   completionPayload, defaultMemoryPrompt, defaultNoteSystemPrompt, defaultRevisionPrompt, defaultSystemPrompt,
-  effectiveSystemPrompt, memoryOutputLimit, normalizeLineEndings, noteIdeaLimit, noteKinds, orderedWritingContext, referenceLabels,
-  systemPromptLimit, writingFields,
+  effectiveSystemPrompt, memoryOutputLimit, normalizeLineEndings, noteIdeaLimit, noteKinds, projectNotesForRequest, referenceLabels,
+  systemPromptLimit, writingFieldPrefix, writingFields,
 } from './writing-config.mjs'
 import { memoryForPrompt, memoryReadThrough, memoryRequest, modelFor, setManuscriptText, updateManuscriptMemory } from './manuscript-memory.mjs'
 import { exportPack, exportProject, hasSceneNote, normalizeProjectManuscript, readPack, readProject, validProject, validProjectBase } from './project-files.mjs'
@@ -335,13 +335,20 @@ function estimate(payload) {
 function renderEstimates() {
   const project = currentProject()
   const keys = refsFor(project).filter(ref => ref.enabled).map(ref => ref.key)
-  const lore = keys.includes('lorebook') ? activeLore(project.lorebook ?? [], project.manuscript, project.direction) : { text: '' }
+  const direction = writingFieldPrefix('direction', project.direction)
+  const lore = keys.includes('lorebook') ? activeLore(project.lorebook ?? [], project.manuscript, direction) : { text: '' }
   const hits = research.cachedHits(project, keys)
   const { draft } = writingBody(project, keys, lore, hits ?? [])
-  const writing = completionPayload(project.model, project.maxTokens, effectiveSystemPrompt(project.systemPrompt, defaultSystemPrompt),
-    orderedWritingContext(draft, keys))
+  const writing = completionPayload(project.model, project.maxTokens, effectiveSystemPrompt(project.systemPrompt, defaultSystemPrompt), draft)
   get('writing-estimate').textContent = estimate(writing) + (!hits && keys.includes('pastPassages') &&
     project.manuscript.length > writingFields.manuscript ? ' · 과거 원문 반영 전' : '')
+  const limitedFields = [
+    ['projectTitle', project.title, '작품 제목'], ['direction', project.direction, '작가의 노트'],
+    ...Object.keys(noteKinds).map(key => [key, project[key], referenceLabels[key]]),
+  ].filter(([key, text]) => Object.hasOwn(draft, key) && text?.length > draft[key].length).map(([, , label]) => label)
+  const limitNotice = get('writing-context-limit')
+  limitNotice.hidden = !limitedFields.length
+  limitNotice.textContent = limitedFields.length ? `요청 한도에 맞춰 ${limitedFields.join(', ')}의 앞부분을 보냅니다.` : ''
 
   const paragraph = selectedRevision()
   const status = get('revision-selection')
@@ -621,10 +628,7 @@ async function generateNoteDraft() {
       idea: plan.idea.trim(),
       systemPrompt: project.notePrompts?.[draft.target],
       notes: {
-        projectTitle: project.title,
-        synopsis: project.synopsis,
-        characterNotes: project.characterNotes ?? '',
-        worldNotes: project.worldNotes,
+        ...projectNotesForRequest(project),
         manuscriptMemory: memoryForPrompt(project),
       },
     }, {
