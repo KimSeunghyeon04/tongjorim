@@ -5,7 +5,7 @@ import { appendParagraphs, freeModel, normalizeLineEndings, optionalProjectModel
 // Keep the same storage key so older tabs detect a workspace change before saving.
 export const storageKey = 'relay.writing.v1'
 const workspaceVersion = 2
-const settingFields = ['model', 'maxTokens', ...optionalProjectModels]
+const settingFields = ['model', 'maxTokens', 'modelOptions', ...optionalProjectModels]
 
 export const currentProjectOf = workspace =>
   workspace.projects.find(project => project.id === workspace.activeProjectId) ?? workspace.projects[0]
@@ -86,7 +86,7 @@ export function mergeModelSettings(workspace, before, after) {
     if (!project) continue
     const previousProject = previous.projects[index]
     for (const key of settingFields) {
-      if (previousProject[key] === nextProject[key]) continue
+      if (JSON.stringify(previousProject[key]) === JSON.stringify(nextProject[key])) continue
       if (nextProject[key] === undefined) delete project[key]
       else project[key] = nextProject[key]
       changed.add(project.id)

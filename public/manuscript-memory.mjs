@@ -1,4 +1,5 @@
 import { requestCompletion } from './completion.js'
+import { modelOptionsFor } from './model-options.mjs'
 import { memoryExcerptLimit, modelFor, writingFieldPrefix, writingFields } from './writing-config.mjs'
 
 export function memoryReadThrough(project) {
@@ -39,6 +40,7 @@ export async function updateManuscriptMemory(project, snapshot, signal, onCheckp
   let through = memoryReadThrough(project)
   let memory = memoryForPrompt(project)
   const { model, systemPrompt, projectTitle } = memoryRequest(project)
+  const modelOptions = modelOptionsFor(project, model)
 
   while (through < snapshot.length) {
     signal.throwIfAborted()
@@ -48,7 +50,7 @@ export async function updateManuscriptMemory(project, snapshot, signal, onCheckp
     if (excerpt.trim()) {
       let revised = ''
       const result = await requestCompletion('/api/memory', {
-        model, projectTitle, memory, excerpt, systemPrompt,
+        model, projectTitle, memory, excerpt, systemPrompt, modelOptions,
       }, {
         signal,
         onText(content) { revised += content },

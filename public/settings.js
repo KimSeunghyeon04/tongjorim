@@ -1,5 +1,6 @@
 import { freeModel, pricing, settingsChangeEvent } from './completion.js'
 import { classifyModel, unclassifiedGeneration } from './model-classification.mjs'
+import { modelOptionsFor, reasoningEfforts, samplingRanges, validModelOptions } from './model-options.mjs'
 import { jsonRequest } from './request-tools.mjs'
 import { searchFor } from './retrieval.mjs'
 import { currentProjectOf, projectName, readWorkspace, storageKey } from './writing-workspace.mjs'
@@ -8,6 +9,20 @@ import { optionalProjectModels, validModelId, writingTokenLimits } from './writi
 const get = id => document.getElementById(id)
 const notifyChange = key => document.dispatchEvent(new CustomEvent(settingsChangeEvent, { detail: key }))
 const labelOrder = new Intl.Collator('ko', { numeric: true })
+
+function optionValue(field) {
+  if (field.type === 'checkbox') return field.checked === field.defaultChecked ? undefined : field.checked
+  if (!field.value) return undefined
+  if (field.type === 'number') return field.valueAsNumber
+  if (!field.dataset.list) return field.value
+  const values = field.value.split(field.dataset.list === 'lines' ? /\r?\n/ : /[,\s]+/).filter(Boolean)
+  return values.length ? [...new Set(values)] : undefined
+}
+
+function setOptionField(field, value) {
+  if (field.type === 'checkbox') field.checked = value ?? field.defaultChecked
+  else field.value = Array.isArray(value) ? value.join(field.dataset.list === 'lines' ? '\n' : ', ') : value ?? ''
+}
 
 function setupSettings(root) {
   const projectSelect = get('settings-project')
@@ -19,6 +34,25 @@ function setupSettings(root) {
   const modelList = get('model-list')
   const retry = get('retry-catalog')
   const modelButtons = [...root.querySelectorAll('[data-model]')]
+  const optionsButtons = [...root.querySelectorAll('[data-model-options]')]
+  const optionsForm = get('model-options')
+  const optionsTitle = get('model-options-title')
+  const optionsError = get('model-options-error')
+  const generationOptions = get('model-generation-options')
+  const routingOptions = get('model-routing-options')
+  const outputPrice = get('model-output-price')
+  const optionFields = [...optionsForm.elements].filter(field => field.name)
+    .map(field => ({ field, path: field.name.split('.') }))
+  for (const [key, { min, max }] of Object.entries(samplingRanges)) {
+    const input = optionsForm.elements.namedItem(key)
+    input.min = min
+    input.max = max
+  }
+  const effortLabels = {
+    none: '끔', minimal: '최소', low: '낮음', medium: '중간',
+    high: '높음', xhigh: '매우 높음', max: '최대',
+  }
+  const effortInput = get('model-reasoning-effort')
   const priceFilters = [...dialog.querySelectorAll('[data-free]')]
   const catalogs = {
     text: { path: '/api/models', models: [classifyModel(freeModel)] },
@@ -27,6 +61,7 @@ function setupSettings(root) {
   let workspace
   let serializedWorkspace
   let picker
+  let optionsEditor
   let freeOnly = false
 
   const catalogFor = key => catalogs[key === 'embedding' ? 'embedding' : 'text']
@@ -36,6 +71,10 @@ function setupSettings(root) {
   function selectedModel(key, project) {
     if (key === 'embedding') return project ? searchFor(project).model : ''
     return project?.[key] ?? ''
+  }
+
+  function effectiveModel(key, project) {
+    return selectedModel(key, project) || project?.model
   }
 
   function showStatus(message, error = false) {
@@ -57,6 +96,88 @@ function setupSettings(root) {
       button.querySelector('strong').textContent = inherited ? '이어쓰기 모델 사용' : name || '선택할 수 없어요'
       button.querySelector('.model-label > span').textContent = inherited ? modelName(catalog, project.model) : name === id ? '' : id
       button.disabled = !project
+    }
+    for (const button of optionsButtons) button.disabled = !project
+    if (optionsEditor && (optionsEditor.projectId !== project?.id ||
+        effectiveModel(optionsEditor.key, project) !== optionsEditor.model)) closeOptions(false)
+  }
+
+  function closeOptions(restoreFocus = true) {
+    if (!optionsEditor) return
+    const { button } = optionsEditor
+    button.setAttribute('aria-expanded', 'false')
+    optionsForm.hidden = true
+    optionsEditor = undefined
+    if (restoreFocus) button.focus()
+  }
+
+  function openOptions(button) {
+    if (optionsEditor?.button === button) return closeOptions()
+    closeOptions(false)
+    const project = selectedProject()
+    const key = button.dataset.modelOptions
+    const model = effectiveModel(key, project)
+    const previous = modelOptionsFor(project, model) ?? {}
+    const catalog = catalogFor(key)
+    const savedEffort = previous.reasoning?.effort
+    const supportedEfforts = catalog.models.find(entry => entry.id === model)?.supportedEfforts ?? reasoningEfforts
+    const effortOptions = supportedEfforts.map(effort => new Option(effortLabels[effort], effort))
+    if (savedEffort && !supportedEfforts.includes(savedEffort)) {
+      effortOptions.push(new Option(`${effortLabels[savedEffort]} (이전 설정)`, savedEffort))
+    }
+    effortInput.replaceChildren(new Option(effortOptions.length ? '기본값' : '모델 기본값', ''), ...effortOptions)
+    effortInput.disabled = !effortOptions.length
+    optionsEditor = { button, key, model, projectId: project.id, previous: JSON.stringify(previous) }
+    const embedding = key === 'embedding'
+    generationOptions.hidden = embedding
+    generationOptions.disabled = embedding
+    outputPrice.hidden = embedding
+    outputPrice.querySelector('input').disabled = embedding
+    routingOptions.open = embedding || Object.keys(previous.provider ?? {}).some(field => field !== 'zdr')
+    for (const { field, path } of optionFields) {
+      setOptionField(field, path.reduce((value, segment) => value?.[segment], previous))
+    }
+    optionsTitle.textContent = modelName(catalog, model)
+    optionsError.hidden = true
+    button.closest('.settings-row').after(optionsForm)
+    optionsForm.hidden = false
+    button.setAttribute('aria-expanded', 'true')
+    get('model-zdr').focus()
+  }
+
+  function saveOptions(event) {
+    event.preventDefault()
+    if (!optionsEditor) return
+    const { model, projectId, previous } = optionsEditor
+    const options = {}
+    for (const { field, path } of optionFields) {
+      const value = optionValue(field)
+      if (value === undefined) continue
+      const target = path.slice(0, -1).reduce((parent, segment) => (parent[segment] ??= {}), options)
+      target[path.at(-1)] = value
+    }
+    if (!validModelOptions(options)) {
+      optionsError.textContent = '상세설정 값을 확인해 주세요. 제공자 목록에는 이름 대신 OpenRouter 제공자 ID를 입력해 주세요.'
+      routingOptions.open = true
+      optionsError.hidden = false
+      return
+    }
+    try {
+      saveProjectSetting(projectId, project => {
+        if (JSON.stringify(modelOptionsFor(project, model) ?? {}) !== previous) {
+          throw new Error('다른 탭에서 이 모델의 상세설정이 바뀌었어요. 다시 열어 최신 값을 확인해 주세요.')
+        }
+        const profiles = { ...project.modelOptions }
+        if (Object.keys(options).length) profiles[model] = options
+        else delete profiles[model]
+        if (Object.keys(profiles).length) project.modelOptions = profiles
+        else delete project.modelOptions
+      })
+      closeOptions()
+    } catch (error) {
+      optionsError.textContent = error instanceof DOMException
+        ? '브라우저에 상세설정을 저장하지 못했어요.' : error.message
+      optionsError.hidden = false
     }
   }
 
@@ -230,6 +351,19 @@ function setupSettings(root) {
       dialog.showModal()
     })
   }
+  for (const button of optionsButtons) button.addEventListener('click', () => openOptions(button))
+  optionsForm.addEventListener('submit', saveOptions)
+  optionsForm.addEventListener('invalid', event => {
+    if (routingOptions.contains(event.target)) routingOptions.open = true
+  }, true)
+  optionsForm.addEventListener('input', () => { optionsError.hidden = true })
+  get('cancel-model-options').addEventListener('click', () => closeOptions())
+  get('reset-model-options').addEventListener('click', () => {
+    for (const { field } of optionFields) {
+      if (!field.matches(':disabled')) setOptionField(field)
+    }
+    optionsError.hidden = true
+  })
   for (const filter of priceFilters) {
     filter.addEventListener('click', () => {
       freeOnly = filter.dataset.free === 'true'
@@ -269,8 +403,9 @@ function setupSettings(root) {
   }
   refreshCatalogs()
   return () => {
+    closeOptions(false)
     loadWorkspace('')
-    showStatus('변경 사항은 이 브라우저에 자동으로 저장돼요.')
+    showStatus('설정은 이 브라우저에 저장돼요.')
     refreshCatalogs()
   }
 }

@@ -1,4 +1,5 @@
 import { requestCompletion } from './completion.js'
+import { withModelOptions } from './model-options.mjs'
 import { loreCardFields, validLoreCardFields } from './project-files.mjs'
 import {
   assistantHistoryTurns, assistantMessageLimit, assistantNoteDraftLimit, assistantReplyLimit,
@@ -135,7 +136,7 @@ export function createWritingAssistant({ transcript, scrollport = transcript, st
     return message
   }
 
-  async function send(request, message) {
+  async function send(request, message, project) {
     if (active || !message.trim() || message.length > assistantMessageLimit) return false
     const controller = new AbortController()
     const { history } = conversation
@@ -149,7 +150,8 @@ export function createWritingAssistant({ transcript, scrollport = transcript, st
 
     try {
       let text = ''
-      const result = await requestCompletion('/api/assistant', { ...request, messages: [...history, user] }, {
+      const body = withModelOptions(project, { ...request, messages: [...history, user] })
+      const result = await requestCompletion('/api/assistant', body, {
         signal: controller.signal,
         onText(content) { text += content },
       })

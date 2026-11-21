@@ -60,7 +60,7 @@ function writeIndex(db, signal, { additions = [], removals = [] }) {
   })
 }
 
-export async function embedPast(projectId, modelId, chunks, query, signal, onEstimate, onUsage) {
+export async function embedPast(projectId, { model: modelId, modelOptions, routeKey }, chunks, query, signal, onEstimate, onUsage) {
   const catalog = await jsonRequest('/api/embeddings/models', { signal })
   const model = catalog.models.find(item => item.id === modelId)
   if (!model) throw new Error('이 임베딩 모델이 현재 OpenRouter 모델 목록에 없어요.')
@@ -69,15 +69,15 @@ export async function embedPast(projectId, modelId, chunks, query, signal, onEst
   const db = await openIndex()
   const stored = await recordsFor(db, projectId)
   const desired = new Map(hashes.map((hash, index) => [hash, texts[index]]))
-  const records = new Map(stored.filter(entry => entry.model === modelId && desired.has(entry.hash))
+  const records = new Map(stored.filter(entry => entry.model === routeKey && desired.has(entry.hash))
     .map(entry => [entry.hash, entry.vector]))
-  const removals = stored.filter(entry => entry.model !== modelId || !desired.has(entry.hash))
+  const removals = stored.filter(entry => entry.model !== routeKey || !desired.has(entry.hash))
   const missing = [...desired].filter(([hash]) => !records.has(hash))
   onEstimate(estimateUsage([...missing.map(([, value]) => value), query], 0, model,
     Math.ceil(missing.length / embeddingBatchSize) + 1))
   let usage
   async function embed(kind, input) {
-    const data = await jsonRequest('/api/embeddings', { body: { model: modelId, input, kind }, signal })
+    const data = await jsonRequest('/api/embeddings', { body: { model: modelId, input, kind, modelOptions }, signal })
     usage = combineUsage(usage, data.usage)
     onUsage(usage)
     if (!Array.isArray(data.vectors) || data.vectors.length !== input.length) throw new Error('검색 벡터를 읽지 못했어요.')
@@ -88,7 +88,7 @@ export async function embedPast(projectId, modelId, chunks, query, signal, onEst
     const batch = missing.slice(start, start + embeddingBatchSize)
     const vectors = await embed('document', batch.map(([, value]) => value))
     await writeIndex(db, signal, { additions: batch.map(([hash], index) => ({
-      projectId, model: modelId, hash, vector: vectors[index],
+      projectId, model: routeKey, hash, vector: vectors[index],
     })) })
     batch.forEach(([hash], index) => records.set(hash, vectors[index]))
   }
@@ -98,7 +98,7 @@ export async function embedPast(projectId, modelId, chunks, query, signal, onEst
   const vectors = chunks.map(chunk => records.get(hashesByText.get(chunk.text)))
   if (vectors.some(vector => vector.length !== queryVector.length)) {
     // A provider can replace a model with one that emits a different number of dimensions.
-    const incompatible = [...desired.keys()].map(hash => ({ projectId, model: modelId, hash }))
+    const incompatible = [...desired.keys()].map(hash => ({ projectId, model: routeKey, hash }))
     await writeIndex(db, signal, { removals: incompatible })
     throw new Error('모델의 벡터 길이가 바뀌었어요. 다시 검색하면 새로 색인해요.')
   }

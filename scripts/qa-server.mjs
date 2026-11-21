@@ -13,6 +13,7 @@ const answerKeys = ['fox', 'elevator', 'sailor']
 const models = ['write', 'memory', 'revise', 'plan'].map(name => ({
   id: `qa/${name}`, name: `QA ${name}`, architecture: { input_modalities: ['text'], output_modalities: ['text'] },
   context_length: 8192, top_provider: { context_length: 6144, max_completion_tokens: 4096 },
+  reasoning: { supported_efforts: ['high', 'medium', 'low'] },
   pricing: { prompt: '0.000002', completion: '0.000003', request: '0.0001' },
 }))
 

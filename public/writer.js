@@ -1,4 +1,5 @@
 import { freeModel, requestCompletion, settingsChangeEvent } from './completion.js'
+import { withModelOptions } from './model-options.mjs'
 import {
   appendParagraphs, completionPayload, defaultMemoryPrompt, defaultNoteSystemPrompt, defaultRevisionPrompt, defaultSystemPrompt,
   effectiveSystemPrompt, memoryOutputLimit, modelFor, normalizeLineEndings, noteKinds, projectNotesForRequest, referenceLabels,
@@ -397,7 +398,9 @@ async function showRequestPreview({ refreshSemantic = false, origin } = {}) {
     const prepared = refreshSemantic
       ? await research.prepare(project, model, controller.signal, { retry: true })
       : research.preview(project, model)
-    const payload = await jsonRequest('/api/write/preview', { body: prepared.body, signal: controller.signal })
+    const payload = await jsonRequest('/api/write/preview', {
+      body: withModelOptions(project, prepared.body), signal: controller.signal,
+    })
     controller.signal.throwIfAborted()
     const blocks = [
       ['시스템 프롬프트', payload.messages[0].content],
@@ -461,7 +464,7 @@ async function generateDraft(revision) {
       body = prepared.body
     }
     if (oneTimeNote !== undefined && body.draft.direction === oneTimeNote) preview.oneTimeNote = oneTimeNote
-    const result = await requestCompletion(revision ? '/api/revise' : '/api/write', body, {
+    const result = await requestCompletion(revision ? '/api/revise' : '/api/write', withModelOptions(project, body), {
       signal: controller.signal,
       onText(content) {
         if (!preview.text.trim()) {
@@ -666,7 +669,7 @@ async function sendPlanMessage(mode) {
     },
     systemPrompt: project.notePrompts?.[target],
     draft: previousDraft?.trim() || null,
-  }, message)
+  }, message, project)
   if (!sent) entry.idea = idea
   if (currentPlanEntry() !== entry) return
   planIdea.value = entry.idea

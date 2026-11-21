@@ -1,4 +1,5 @@
 import { loreKinds, loreLimits } from './retrieval.mjs'
+import { validModelOptionProfiles } from './model-options.mjs'
 import { defaultReferences, maxSourceLimits, normalizeLineEndings, noteKinds, optionalProjectModels, systemPromptLimit, validModelId, validSourceLimit, writingFields, writingTokenLimits } from './writing-config.mjs'
 
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -11,7 +12,7 @@ const pick = (value, keys) => Object.fromEntries(keys.filter(key => Object.hasOw
 const promptKeys = ['systemPrompt', 'notePrompts', 'references', 'authorMode']
 const projectKeys = [
   'title', 'synopsis', 'characterNotes', 'worldNotes', 'model', 'maxTokens', 'manuscript', 'direction', 'legacySceneNotes',
-  'manuscriptMemory', 'autoMemory', 'lorebook', 'search', 'sourceLimits', ...optionalProjectModels, ...promptKeys,
+  'manuscriptMemory', 'autoMemory', 'lorebook', 'search', 'sourceLimits', 'modelOptions', ...optionalProjectModels, ...promptKeys,
 ]
 const loreCardFieldKeys = ['name', 'aliases', 'kind', 'description', 'priority', 'always']
 const cardKeys = ['id', ...loreCardFieldKeys]
@@ -66,6 +67,7 @@ export function validProjectBase(project) {
 export function validProject(project) {
   if (!validProjectBase(project) || typeof project.manuscript !== 'string' || typeof project.direction !== 'string') return false
   return optional(project.autoMemory, validBoolean) && optional(project.lorebook, validLore) &&
+    optional(project.modelOptions, validModelOptionProfiles) &&
     optional(project.sourceLimits, limits => record(limits) &&
       Object.keys(maxSourceLimits).every(field => validSourceLimit(field, limits[field]))) &&
     optionalProjectModels.every(key => optional(project[key], validModelId)) &&

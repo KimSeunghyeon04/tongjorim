@@ -1,4 +1,5 @@
 import { embedPast } from './embedding-index.mjs'
+import { embeddingRouteKey, modelOptionsFor } from './model-options.mjs'
 import { memoryForPrompt } from './manuscript-memory.mjs'
 import { defaultReferenceSettings, loreCardFields, validLoreCard } from './project-files.mjs'
 import { actualUsage, combineUsage, estimateLabel, usageLabel } from './request-tools.mjs'
@@ -142,7 +143,7 @@ export function setupResearch({ get, currentProject, saveWorkspace, onChange, go
       kind: 'lore', mode, model: modelFor(project, 'plan'), maxTokens: project.maxTokens,
       context: { ...projectNotesForRequest(project), manuscriptMemory: memoryForPrompt(project) },
       card, draft: entry.draft,
-    }, message)
+    }, message, project)
     if (entry !== editorEntry) return
     if (sent) assistantPrompt.value = ''
     syncAssistant()
@@ -347,7 +348,8 @@ export function setupResearch({ get, currentProject, saveWorkspace, onChange, go
 
   function sameResearch(entry, project, refs, search) {
     return entry.manuscript === project.manuscript && entry.direction === project.direction &&
-      entry.recent === refs.includes('manuscript') && entry.enabled === search.enabled && entry.model === search.model
+      entry.recent === refs.includes('manuscript') && entry.enabled === search.enabled &&
+      entry.routeKey === embeddingRouteKey(search.model, modelOptionsFor(project, search.model))
   }
 
   function forget(project) {
@@ -387,13 +389,15 @@ export function setupResearch({ get, currentProject, saveWorkspace, onChange, go
   function startSearch(project, references, search, { chunks, query }) {
     forget(project)
     const controller = new AbortController()
-    const entry = { ...search, manuscript: project.manuscript, direction: project.direction,
+    const modelOptions = modelOptionsFor(project, search.model)
+    const entry = { ...search, modelOptions, routeKey: embeddingRouteKey(search.model, modelOptions),
+      manuscript: project.manuscript, direction: project.direction,
       recent: references.includes('manuscript'), chunkCount: chunks.length, status: '관련 원문 찾는 중…', controller, pending: true, waiters: 0 }
     cache.set(project, entry)
     const show = () => { if (project === currentProject()) renderState() }
     entry.promise = (async () => {
       try {
-        entry.semantic = await embedPast(project.id, entry.model, chunks, query, controller.signal, estimate => {
+        entry.semantic = await embedPast(project.id, entry, chunks, query, controller.signal, estimate => {
           entry.estimate = estimate
           show()
         }, usage => {

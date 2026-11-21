@@ -11,6 +11,7 @@ import {
   writingFields, writingTokenLimits,
 } from './public/writing-config.mjs'
 import { actualUsage } from './public/request-tools.mjs'
+import { openRouterOptions, reasoningEfforts, validModelOptions } from './public/model-options.mjs'
 import { loreCardFields, validLoreCardFields } from './public/project-files.mjs'
 import { chunkLimit, embeddingBatchSize, embeddingQueryLimit, loreKinds, loreLimits } from './public/retrieval.mjs'
 
@@ -23,12 +24,15 @@ try {
 const apiKey = process.env.OPENROUTER_API_KEY?.trim() || process.env.OPENROUTER_API?.trim()
 const port = Number(process.env.PORT || 4173)
 const baseUrl = 'https://openrouter.ai/api/v1'
+const writingRequestBytes = 1024 * 1024
+const assistantRequestBytes = 512 * 1024
 const hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`])
 const assets = new Map([
   ['/', ['writer.html', 'text/html; charset=utf-8']],
   ['/settings', ['settings.html', 'text/html; charset=utf-8']],
   ['/settings.js', ['settings.js', 'text/javascript; charset=utf-8']],
   ['/model-classification.mjs', ['model-classification.mjs', 'text/javascript; charset=utf-8']],
+  ['/model-options.mjs', ['model-options.mjs', 'text/javascript; charset=utf-8']],
   ['/writer.js', ['writer.js', 'text/javascript; charset=utf-8']],
   ['/writing-config.mjs', ['writing-config.mjs', 'text/javascript; charset=utf-8']],
   ['/writing-assistant.mjs', ['writing-assistant.mjs', 'text/javascript; charset=utf-8']],
@@ -99,7 +103,10 @@ async function modelCatalog() {
         const contextLimits = [model.context_length, model.top_provider?.context_length].map(tokenLimit).filter(Boolean)
         const contextLength = contextLimits.length ? Math.min(...contextLimits) : null
         const maxCompletionTokens = tokenLimit(model.top_provider?.max_completion_tokens)
-        return { id: model.id, name: model.name, input, output, request, contextLength, maxCompletionTokens,
+        const advertisedEfforts = model.reasoning?.supported_efforts
+        const supportedEfforts = advertisedEfforts === null ? reasoningEfforts
+          : Array.isArray(advertisedEfforts) ? advertisedEfforts.filter(effort => reasoningEfforts.includes(effort)) : []
+        return { id: model.id, name: model.name, input, output, request, contextLength, maxCompletionTokens, supportedEfforts,
           free: input === 0 && output === 0 && request === 0 }
       })
       .sort((a, b) => a.name.localeCompare(b.name))
@@ -140,8 +147,7 @@ function resolveSystemPrompt(prompt, fallback) {
   return effectiveSystemPrompt(prompt, fallback)
 }
 
-async function readWritingRequest(req) {
-  const { model, maxTokens, draft, systemPrompt, references } = (await readJsonRequest(req, 1024 * 1024)) ?? {}
+function writingCompletion({ model, maxTokens, draft, systemPrompt, references }) {
   const context = Object.fromEntries(Object.keys(writingFields).map(field => [field, draft?.[field]]))
   context.characterNotes ??= ''
   context.manuscriptMemory ??= ''
@@ -167,9 +173,7 @@ async function readWritingRequest(req) {
   return completionPayload(model, maxTokens, prompt, included)
 }
 
-async function readAssistantRequest(req) {
-  const { kind, mode, model, maxTokens, target, messages, context, card, draft, systemPrompt } =
-    (await readJsonRequest(req, 512 * 1024)) ?? {}
+function assistantCompletion({ kind, mode, model, maxTokens, target, messages, context, card, draft, systemPrompt }) {
   const fields = ['projectTitle', ...Object.keys(noteKinds), 'manuscriptMemory']
   const notes = Object.fromEntries(fields.map(field => [field, context?.[field]]))
   notes.manuscriptMemory ??= ''
@@ -224,8 +228,7 @@ async function readAssistantRequest(req) {
   ] }
 }
 
-async function readMemoryRequest(req) {
-  const { model, projectTitle, memory, excerpt, systemPrompt } = (await readJsonRequest(req)) ?? {}
+function memoryCompletion({ model, projectTitle, memory, excerpt, systemPrompt }) {
   if (typeof model !== 'string' || model.length > 200 || !modelIdPattern.test(model) ||
       typeof projectTitle !== 'string' || projectTitle.length > writingFields.projectTitle ||
       typeof memory !== 'string' || memory.length > writingFields.manuscriptMemory ||
@@ -237,8 +240,7 @@ async function readMemoryRequest(req) {
     { projectTitle, memory, excerpt })
 }
 
-async function readRevisionRequest(req) {
-  const { model, maxTokens, paragraph, direction, systemPrompt } = (await readJsonRequest(req)) ?? {}
+function revisionCompletion({ model, maxTokens, paragraph, direction, systemPrompt }) {
   if (typeof model !== 'string' || model.length > 200 || !modelIdPattern.test(model) ||
       !writingTokenLimits.includes(maxTokens) ||
       typeof paragraph !== 'string' || !paragraph.trim() || paragraph.length > revisionParagraphLimit ||
@@ -248,8 +250,11 @@ async function readRevisionRequest(req) {
   return completionPayload(model, maxTokens, resolveSystemPrompt(systemPrompt, defaultRevisionPrompt), { paragraph, direction })
 }
 
-function inferencePayload(payload) {
-  return { ...payload, provider: { ...payload.provider, zdr: true } }
+function inferencePayload(payload, modelOptions, options) {
+  if (modelOptions !== undefined && !validModelOptions(modelOptions)) {
+    throw new RequestError(400, '모델 상세설정의 형식이나 범위를 확인해 주세요.')
+  }
+  return { ...payload, ...openRouterOptions(modelOptions, options) }
 }
 
 let cachedEmbeddingModels
@@ -273,13 +278,14 @@ async function embeddingModels() {
 }
 
 async function embed(req, res) {
-  const { model, input, kind } = (await readJsonRequest(req)) ?? {}
+  const { model, input, kind, modelOptions } = (await readJsonRequest(req)) ?? {}
   const maxChars = kind === 'document' ? chunkLimit : embeddingQueryLimit
   if (typeof model !== 'string' || !modelIdPattern.test(model) || !['document', 'query'].includes(kind) ||
       !Array.isArray(input) || !input.length || input.length > (kind === 'query' ? 1 : embeddingBatchSize) ||
       input.some(text => typeof text !== 'string' || !text.trim() || text.length > maxChars)) {
     throw new RequestError(400, '임베딩에 보낼 문단이나 검색어를 확인해 주세요.')
   }
+  const body = inferencePayload({ model, input, encoding_format: 'float' }, modelOptions, { embedding: true })
   if (!(await embeddingModels()).some(item => item.id === model)) {
     throw new RequestError(404, '현재 이 임베딩 모델을 사용할 수 없어요.')
   }
@@ -292,7 +298,7 @@ async function embed(req, res) {
       method: 'POST',
       redirect: 'error',
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(inferencePayload({ model, input, encoding_format: 'float' })),
+      body: JSON.stringify(body),
       signal: AbortSignal.any([disconnect.signal, AbortSignal.timeout(45000)]),
     })
     if (!response.ok) throw new RequestError(response.status, upstreamErrors[response.status] ?? '임베딩 요청에 실패했어요.')
@@ -315,11 +321,14 @@ async function embed(req, res) {
   }
 }
 
-const streamingPayload = completion => inferencePayload({ ...completion, stream: true })
+async function readStreamingPayload(req, completionFor, maxBytes) {
+  const { modelOptions, ...input } = (await readJsonRequest(req, maxBytes)) ?? {}
+  return inferencePayload({ ...completionFor(input), stream: true }, modelOptions)
+}
 
-async function streamCompletion(req, res, readRequest) {
+async function streamCompletion(req, res, completionFor, maxBytes) {
   if (!apiKey) throw new RequestError(503, '.env에 OPENROUTER_API 키를 설정하고 서버를 다시 시작해 주세요.')
-  const completion = await readRequest(req)
+  const payload = await readStreamingPayload(req, completionFor, maxBytes)
   const disconnect = new AbortController()
   const timeout = AbortSignal.timeout(120_000)
   const signal = AbortSignal.any([disconnect.signal, timeout])
@@ -335,7 +344,7 @@ async function streamCompletion(req, res, readRequest) {
       method: 'POST',
       redirect: 'error',
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
-      body: JSON.stringify(streamingPayload(completion)),
+      body: JSON.stringify(payload),
       signal,
     })
     if (!upstream.ok || !upstream.headers.get('content-type')?.includes('text/event-stream')) {
@@ -415,15 +424,15 @@ const server = createServer(async (req, res) => {
     } else if (req.method === 'GET' && path === '/api/models') {
       json(res, 200, { keyConfigured: Boolean(apiKey), ...await modelCatalog() })
     } else if (req.method === 'POST' && path === '/api/write') {
-      await streamCompletion(req, res, readWritingRequest)
+      await streamCompletion(req, res, writingCompletion, writingRequestBytes)
     } else if (req.method === 'POST' && path === '/api/write/preview') {
-      json(res, 200, streamingPayload(await readWritingRequest(req)))
+      json(res, 200, await readStreamingPayload(req, writingCompletion, writingRequestBytes))
     } else if (req.method === 'POST' && path === '/api/revise') {
-      await streamCompletion(req, res, readRevisionRequest)
+      await streamCompletion(req, res, revisionCompletion)
     } else if (req.method === 'POST' && path === '/api/assistant') {
-      await streamCompletion(req, res, readAssistantRequest)
+      await streamCompletion(req, res, assistantCompletion, assistantRequestBytes)
     } else if (req.method === 'POST' && path === '/api/memory') {
-      await streamCompletion(req, res, readMemoryRequest)
+      await streamCompletion(req, res, memoryCompletion)
     } else if (req.method === 'GET' && path === '/api/embeddings/models') {
       if (!apiKey) throw new RequestError(503, 'OpenRouter API 키를 설정해 주세요.')
       json(res, 200, { models: await embeddingModels() })
