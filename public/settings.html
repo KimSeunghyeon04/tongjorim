@@ -171,6 +171,30 @@
         <select id="generation-limit" class="settings-select" aria-describedby="generation-limit-hint" disabled></select>
       </div>
     </section>
+
+    <section class="settings-section" aria-labelledby="openrouter-title">
+      <header class="settings-section-heading">
+        <h2 id="openrouter-title">OpenRouter 사용량</h2>
+        <button class="outline-button openrouter-refresh" id="openrouter-refresh" type="button">새로고침</button>
+      </header>
+      <dl class="openrouter-metrics">
+        <div>
+          <dt>키 사용액</dt>
+          <dd id="openrouter-spend">—</dd>
+          <dd class="openrouter-detail" id="openrouter-periods" hidden></dd>
+        </div>
+        <div>
+          <dt>키의 남은 지출 한도</dt>
+          <dd id="openrouter-remaining">—</dd>
+          <dd class="openrouter-detail" id="openrouter-limit" hidden></dd>
+        </div>
+        <div id="openrouter-credit-metric" hidden>
+          <dt>계정 크레딧 잔액</dt>
+          <dd id="openrouter-credit">—</dd>
+        </div>
+      </dl>
+      <p class="openrouter-status" id="openrouter-status" role="status">사용량을 불러오는 중이에요.</p>
+    </section>
   </main>
 
   <dialog id="model-dialog" aria-labelledby="dialog-title">

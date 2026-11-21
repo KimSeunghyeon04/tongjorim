@@ -1,7 +1,7 @@
 import { freeModel, pricing, settingsChangeEvent } from './completion.js'
 import { classifyModel, unclassifiedGeneration } from './model-classification.mjs'
 import { modelOptionsFor, reasoningEfforts, samplingRanges, validModelOptions } from './model-options.mjs'
-import { jsonRequest } from './request-tools.mjs'
+import { formatCost, jsonRequest } from './request-tools.mjs'
 import { searchFor } from './retrieval.mjs'
 import { currentProjectOf, projectName, readWorkspace, storageKey } from './writing-workspace.mjs'
 import { optionalProjectModels, validModelId, writingTokenLimits } from './writing-config.mjs'
@@ -24,7 +24,56 @@ function setOptionField(field, value) {
   else field.value = Array.isArray(value) ? value.join(field.dataset.list === 'lines' ? '\n' : ', ') : value ?? ''
 }
 
+function setupOpenRouterUsage() {
+  const button = get('openrouter-refresh')
+  const spend = get('openrouter-spend')
+  const periods = get('openrouter-periods')
+  const remaining = get('openrouter-remaining')
+  const limit = get('openrouter-limit')
+  const creditMetric = get('openrouter-credit-metric')
+  const credit = get('openrouter-credit')
+  const status = get('openrouter-status')
+  const resetLabels = { daily: '일일 한도', weekly: '주간 한도', monthly: '월간 한도' }
+  const time = new Intl.DateTimeFormat('ko-KR', { hour: 'numeric', minute: '2-digit' })
+  const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })
+  const formatAmount = value => value == null ? formatCost(value) : usd.format(value)
+
+  async function refresh() {
+    if (button.hasAttribute('aria-disabled')) return
+    button.setAttribute('aria-disabled', 'true')
+    status.removeAttribute('data-error')
+    status.textContent = '사용량을 불러오는 중이에요.'
+    try {
+      const { key, credits } = await jsonRequest('/api/openrouter/usage')
+      spend.textContent = formatAmount(key.total)
+      periods.hidden = key.today == null && key.month == null
+      periods.textContent = periods.hidden ? '' : `오늘 ${formatAmount(key.today)} · 이번 달 ${formatAmount(key.month)}`
+      remaining.textContent = key.limit === null ? '한도 미설정' : formatAmount(key.remaining)
+      limit.hidden = key.limit == null
+      limit.textContent = limit.hidden ? '' : `${resetLabels[key.reset] ?? '전체 한도'} ${formatCost(key.limit)}`
+      creditMetric.hidden = credits === null
+      credit.textContent = formatAmount(credits?.balance)
+
+      const errors = [key.error, credits?.error].filter(Boolean)
+      status.toggleAttribute('data-error', errors.length > 0)
+      status.textContent = errors.length ? errors.join(' ') : `최근 확인 ${time.format(Date.now())}`
+    } catch {
+      spend.textContent = remaining.textContent = credit.textContent = formatCost(null)
+      periods.hidden = limit.hidden = true
+      status.setAttribute('data-error', '')
+      status.textContent = 'OpenRouter 사용량에 연결할 수 없어요. 새로고침해 주세요.'
+    } finally {
+      button.removeAttribute('aria-disabled')
+    }
+  }
+
+  button.addEventListener('click', refresh)
+  refresh()
+  return refresh
+}
+
 function setupSettings(root) {
+  const refreshUsage = setupOpenRouterUsage()
   const projectSelect = get('settings-project')
   const limit = get('generation-limit')
   const dialog = get('model-dialog')
@@ -407,6 +456,7 @@ function setupSettings(root) {
     loadWorkspace('')
     showStatus('설정은 이 브라우저에 저장돼요.')
     refreshCatalogs()
+    refreshUsage()
   }
 }
 

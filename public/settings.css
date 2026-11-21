@@ -65,6 +65,22 @@ body:has(> .settings-popup[open]) { overflow: hidden; }
   border-top: 1px solid var(--line);
 }
 .settings-row h3, .settings-row label, .settings-project label { margin: 0; font-size: 14px; font-weight: 700; }
+.openrouter-refresh { justify-self: end; }
+.openrouter-refresh[aria-disabled="true"] { color: var(--muted); cursor: default; }
+.openrouter-metrics {
+  display: grid;
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  gap: 16px 24px;
+  margin: 0;
+  padding: 14px 20px 10px;
+  border-top: 1px solid var(--line);
+}
+.openrouter-metrics dt { color: var(--muted); font-size: 13px; }
+.openrouter-metrics dd { margin: 3px 0 0; font-weight: 700; font-variant-numeric: tabular-nums; }
+.openrouter-metrics .openrouter-detail { color: var(--muted); font-size: 13px; font-weight: 400; }
+.settings-section .openrouter-status { padding: 0 20px 14px; }
+.settings-section .openrouter-status[data-error] { color: #8a382a; }
 .settings-project { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; }
 .settings-select {
   width: 100%;

@@ -22,6 +22,7 @@ try {
 }
 
 const apiKey = process.env.OPENROUTER_API_KEY?.trim() || process.env.OPENROUTER_API?.trim()
+const managementKey = process.env.OPENROUTER_MANAGE?.trim()
 const port = Number(process.env.PORT || 4173)
 const baseUrl = 'https://openrouter.ai/api/v1'
 const writingRequestBytes = 1024 * 1024
@@ -117,6 +118,57 @@ async function modelCatalog() {
   } catch {
     return { models: cachedModels?.result.models ?? [freeModel], catalogAvailable: false }
   }
+}
+
+async function readOpenRouterUsage(path, key, read, subject, credential) {
+  try {
+    const response = await fetch(`${baseUrl}/${path}`, {
+      headers: { Authorization: `Bearer ${key}` },
+      redirect: 'error',
+      signal: AbortSignal.timeout(7000),
+    })
+    if (response.ok) {
+      const { data } = await response.json()
+      const usage = read(data)
+      if (usage) return usage
+    } else {
+      await response.body?.cancel()
+      if (response.status === 401 || response.status === 403) {
+        return { error: `OpenRouter에서 ${subject} 조회 권한을 확인하지 못했어요. .env의 ${credential} 값을 확인해 주세요.` }
+      }
+    }
+  } catch {
+    // Allow the other usage figures to load when this request fails.
+  }
+  return { error: `${subject} 정보를 불러오지 못했어요. 잠시 후 새로고침해 주세요.` }
+}
+
+function keyUsage(data) {
+  if (!Number.isFinite(data?.usage)) return null
+  if (data.limit !== null && (!Number.isFinite(data.limit) || !Number.isFinite(data.limit_remaining))) return null
+  return {
+    total: data.usage,
+    today: Number.isFinite(data.usage_daily) ? data.usage_daily : null,
+    month: Number.isFinite(data.usage_monthly) ? data.usage_monthly : null,
+    limit: data.limit,
+    remaining: data.limit === null ? null : Math.max(0, data.limit_remaining),
+    reset: ['daily', 'weekly', 'monthly'].includes(data.limit_reset) ? data.limit_reset : null,
+  }
+}
+
+function creditBalance(data) {
+  if (!Number.isFinite(data?.total_credits) || !Number.isFinite(data?.total_usage)) return null
+  return { balance: data.total_credits - data.total_usage }
+}
+
+async function openRouterUsage() {
+  const [key, credits] = await Promise.all([
+    apiKey ? readOpenRouterUsage('key', apiKey, keyUsage, '키 사용액', '집필용 API 키')
+      : { error: '집필용 OpenRouter API 키를 설정하면 사용액과 한도를 볼 수 있어요.' },
+    managementKey ? readOpenRouterUsage('credits', managementKey, creditBalance, '계정 크레딧', 'OPENROUTER_MANAGE')
+      : null,
+  ])
+  return { key, credits }
 }
 
 async function readJsonRequest(req, maxBytes = 256 * 1024) {
@@ -427,6 +479,8 @@ const server = createServer(async (req, res) => {
       res.end(content)
     } else if (req.method === 'GET' && path === '/api/models') {
       json(res, 200, { keyConfigured: Boolean(apiKey), ...await modelCatalog() })
+    } else if (req.method === 'GET' && path === '/api/openrouter/usage') {
+      json(res, 200, await openRouterUsage())
     } else if (req.method === 'POST' && path === '/api/write') {
       await streamCompletion(req, res, writingCompletion, writingRequestBytes)
     } else if (req.method === 'POST' && path === '/api/write/preview') {

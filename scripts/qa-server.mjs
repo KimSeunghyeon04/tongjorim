@@ -8,6 +8,8 @@ const log = join(tmpdir(), 'relay-openrouter-qa.ndjson')
 writeFileSync(log, '')
 console.log(`Mock OpenRouter request log: ${log}`)
 const upstream = 'https://openrouter.ai/api/v1'
+const qaApiKey = 'relay-qa-key'
+const qaManagementKey = 'relay-qa-management-key'
 const otherEmbeddingModel = 'qa/another-embedding'
 const answerKeys = ['fox', 'elevator', 'sailor']
 const models = ['write', 'memory', 'revise', 'plan'].map(name => ({
@@ -22,6 +24,18 @@ globalThis.fetch = async (url, options) => {
   if (typeof url !== 'string' || !url.startsWith(upstream)) return originalFetch(url, options)
   const path = url.slice(upstream.length)
   if (path === '/models') return Response.json({ data: models })
+  if (path === '/key') {
+    if (options?.headers?.Authorization !== `Bearer ${qaApiKey}`) return Response.json({}, { status: 401 })
+    return Response.json({ data: {
+      usage: 12.75, usage_daily: 0.42, usage_monthly: 5.75,
+      limit: 10, limit_remaining: 4.25, limit_reset: 'monthly',
+    } })
+  }
+  if (path === '/credits') {
+    return options?.headers?.Authorization === `Bearer ${qaManagementKey}`
+      ? Response.json({ data: { total_credits: 32.5, total_usage: 14.75 } })
+      : Response.json({}, { status: 403 })
+  }
   if (path === '/embeddings/models') return Response.json({ data: [defaultEmbeddingModel, otherEmbeddingModel, 'qa/failed-embedding']
     .map(id => ({ id, name: id, pricing: { prompt: '0.000001' } })) })
   const body = JSON.parse(options.body)
@@ -57,6 +71,7 @@ globalThis.fetch = async (url, options) => {
   })
 }
 
-process.env.OPENROUTER_API_KEY = 'relay-qa-key'
+process.env.OPENROUTER_API_KEY = qaApiKey
+if (process.env.OPENROUTER_MANAGE !== qaManagementKey) process.env.OPENROUTER_MANAGE = ''
 process.env.PORT ??= qaPort
 await import('../server.mjs')
