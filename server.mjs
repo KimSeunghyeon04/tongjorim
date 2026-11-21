@@ -30,6 +30,7 @@ const hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`])
 const assets = new Map([
   ['/', ['writer.html', 'text/html; charset=utf-8']],
   ['/settings', ['settings.html', 'text/html; charset=utf-8']],
+  ['/favicon.png', ['favicon.png', 'image/png']],
   ['/settings.js', ['settings.js', 'text/javascript; charset=utf-8']],
   ['/model-classification.mjs', ['model-classification.mjs', 'text/javascript; charset=utf-8']],
   ['/model-options.mjs', ['model-options.mjs', 'text/javascript; charset=utf-8']],
