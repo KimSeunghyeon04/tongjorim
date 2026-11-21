@@ -2,8 +2,6 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#f7f8fc">
   <title>Relay 집필실</title>
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/writer.css">
@@ -55,7 +53,6 @@
           <div class="manuscript-toolbar-actions">
             <span id="save-status" class="save-status" role="status"></span>
             <button type="button" class="quiet-button" id="open-revision">문단 퇴고</button>
-            <a href="#writing-tools" class="quiet-button tools-jump">집필 도구</a>
           </div>
         </div>
         <div class="paper">
@@ -158,7 +155,7 @@
       </section>
     </main>
 
-    <aside class="writing-tools" id="writing-tools" aria-label="집필 도구" tabindex="-1">
+    <aside class="writing-tools" aria-label="집필 도구">
       <div class="tool-switcher" role="group" aria-label="집필 도구 선택">
         <button type="button" data-panel="generate" aria-controls="generate-panel" aria-pressed="true">이어쓰기</button>
         <button type="button" data-panel="notes" aria-controls="notes-panel" aria-pressed="false">작품 메모</button>
@@ -187,13 +184,13 @@
           <div class="memory-controls source-settings">
             <div class="source-row">
               <label for="source-manuscript">최근 원고 상한</label>
-              <span><input class="writing-field" id="source-manuscript" inputmode="numeric" maxlength="5" autocomplete="off" aria-describedby="source-saved-manuscript source-manuscript-status"> 자</span>
+              <span><input class="writing-field" id="source-manuscript" maxlength="5" autocomplete="off" aria-describedby="source-saved-manuscript source-manuscript-status"> 자</span>
               <p class="field-hint source-row-summary"><strong id="source-saved-manuscript"></strong> <span id="source-manuscript-status"></span></p>
               <div class="source-passage" id="source-recent-passage" hidden></div>
             </div>
             <div class="source-row">
               <label for="source-pastPassages">과거 원문 상한</label>
-              <span><input class="writing-field" id="source-pastPassages" inputmode="numeric" maxlength="5" autocomplete="off" aria-describedby="source-saved-pastPassages source-pastPassages-status"> 자</span>
+              <span><input class="writing-field" id="source-pastPassages" maxlength="5" autocomplete="off" aria-describedby="source-saved-pastPassages source-pastPassages-status"> 자</span>
               <p class="field-hint source-row-summary"><strong id="source-saved-pastPassages"></strong> <span id="source-pastPassages-status"></span></p>
               <ul class="source-passage" id="source-past-hits" hidden></ul>
             </div>

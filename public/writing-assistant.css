@@ -1,7 +1,7 @@
 .assistant-transcript {
   display: grid;
   gap: 8px;
-  max-height: min(270px, 46dvh);
+  max-height: min(270px, 46vh);
   overflow: auto;
   overscroll-behavior: contain;
   list-style: none;

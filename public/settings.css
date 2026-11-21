@@ -1,12 +1,12 @@
 .settings {
   height: auto;
-  min-height: 100dvh;
+  min-height: 100vh;
 }
 .settings ::selection { color: #222d91; background: #e2e6ff; }
 .settings input, #model-search { caret-color: var(--accent); }
 .settings-popup {
   width: min(850px, calc(100% - 32px));
-  max-height: min(780px, calc(100dvh - 32px));
+  max-height: min(780px, calc(100vh - 32px));
   box-shadow: none;
   overflow: hidden;
 }
@@ -131,20 +131,3 @@ body:has(> .settings-popup[open]) { overflow: hidden; }
   line-height: 1.55;
 }
 .model-dialog-status:has(#model-list-status:empty):has(#model-save-error[hidden]) { display: none; }
-
-@media (max-width: 620px) {
-  .settings-popup {
-    width: calc(100% - 16px);
-    max-height: calc(100dvh - 16px);
-  }
-  .settings-popup-header { padding-inline: 12px; }
-  .settings-popup .settings-main { padding-inline: 10px; }
-  .settings-popup .settings-row { padding-block: 8px; row-gap: 6px; }
-  .settings-main { width: calc(100% - 32px); padding-block: 22px 32px; }
-  .settings-heading { margin-bottom: 16px; }
-  .settings-heading h1 { font-size: 26px; }
-  .settings-section-heading, .settings-row { grid-template-columns: minmax(0, 1fr); padding-inline: 14px; }
-  .settings-row { padding-block: 12px; }
-  .settings-section-heading { gap: 12px; }
-  .settings-section .settings-error { margin-inline: 14px; }
-}

@@ -150,8 +150,6 @@
 }
 .save-status { flex: none; font-size: 11px; }
 .manuscript-toolbar-actions { flex: none; display: flex; align-items: center; gap: 8px; }
-.tools-jump { display: none; text-decoration: none; }
-.tools-jump:focus-visible { outline: 2px solid var(--accent); }
 .storage-error {
   display: grid;
   justify-items: start;
@@ -336,32 +334,3 @@
 .memory-auto { display: flex; align-items: center; gap: 7px; min-height: 28px; font-size: 13px; font-weight: 700; }
 .memory-auto input { margin: 0; accent-color: var(--accent); width: 15px; height: 15px; }
 .memory-buttons { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
-
-@media (max-width: 1050px) {
-  .writing-workspace { grid-template-columns: minmax(0, 1fr) 246px; }
-  .manuscript-stage { padding-inline: 17px; }
-  .paper { padding-inline: 23px; }
-  .writing-tools { padding-inline: 14px; }
-}
-
-@media (max-width: 815px) {
-  .writer { height: auto; min-height: 100dvh; }
-  .writer .topbar, .project-bar { padding-inline: 16px; }
-  .writing-workspace { grid-template-columns: minmax(0, 1fr); }
-  .manuscript-stage { overflow: visible; padding: 12px 16px 18px; }
-  .manuscript-toolbar { min-height: 33px; }
-  #active-project-name { font-size: 21px; }
-  .tools-jump { display: inline-flex; }
-  .paper { min-height: 340px; padding: 18px 20px 24px; }
-  .paper-label { margin-bottom: 12px; }
-  .manuscript { min-height: 255px; }
-  .manuscript, .proposal-body { font-size: 16px; }
-  .writing-tools { border-left: 0; border-top: 1px solid var(--line); padding: 7px 16px 18px; }
-  .writing-tools > * { max-width: 600px; margin-inline: auto; }
-}
-
-@media (max-width: 560px) {
-  .project-controls { width: 100%; grid-template-columns: auto minmax(0, 1fr) auto; }
-  .manuscript-toolbar { flex-wrap: wrap; gap: 4px 10px; }
-  .manuscript-toolbar-actions { margin-inline-start: auto; }
-}
