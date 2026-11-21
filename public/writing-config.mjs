@@ -14,8 +14,11 @@ export const writingFields = {
 
 export const systemPromptLimit = 8000
 export const modelIdPattern = /^[a-z0-9][a-z0-9_.-]*\/[a-z0-9][a-z0-9_.:+-]*$/i
+export const validModelId = value => typeof value === 'string' && value.length <= 200 && modelIdPattern.test(value)
 export const freeModel = { id: 'openrouter/free', name: 'Free Models Router', free: true, input: 0, output: 0, request: 0 }
 export const writingTokenLimits = [1024, 2048, 4096]
+export const optionalProjectModels = ['revisionModel', 'memoryModel', 'planModel']
+export const modelFor = (project, purpose) => project[`${purpose}Model`] ?? project.model
 export const noteIdeaLimit = 1200
 export const memoryExcerptLimit = 12000
 export const memoryOutputLimit = 4096
@@ -58,6 +61,13 @@ export function completionPayload(model, maxTokens, systemPrompt, context) {
 
 export const effectiveSystemPrompt = (prompt, fallback) => prompt?.trim() ? prompt : fallback
 export const normalizeLineEndings = text => text.replace(/\r\n?/g, '\n')
+
+export function appendParagraphs(original, text) {
+  if (!original || !text) return original + text
+  const trailing = original.endsWith('\n\n') ? 2 : Number(original.endsWith('\n'))
+  const leading = text.startsWith('\n\n') ? 2 : Number(text.startsWith('\n'))
+  return original + '\n'.repeat(Math.max(0, 2 - trailing - leading)) + text
+}
 
 export const noteKinds = {
   synopsis: {

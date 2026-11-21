@@ -1,8 +1,7 @@
 import { loreKinds, loreLimits } from './retrieval.mjs'
-import { defaultReferences, modelIdPattern, normalizeLineEndings, noteKinds, systemPromptLimit, writingFields, writingTokenLimits } from './writing-config.mjs'
+import { defaultReferences, normalizeLineEndings, noteKinds, optionalProjectModels, systemPromptLimit, validModelId, writingFields, writingTokenLimits } from './writing-config.mjs'
 
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value)
-const validModel = value => typeof value === 'string' && value.length <= 200 && modelIdPattern.test(value)
 const optional = (value, validate) => value === undefined || validate(value)
 const limited = (value, max) => typeof value === 'string' && value.length <= max
 const validPrompt = value => limited(value, systemPromptLimit)
@@ -12,7 +11,7 @@ const pick = (value, keys) => Object.fromEntries(keys.filter(key => Object.hasOw
 const promptKeys = ['systemPrompt', 'notePrompts', 'references', 'authorMode']
 const projectKeys = [
   'title', 'synopsis', 'characterNotes', 'worldNotes', 'model', 'maxTokens', 'manuscript', 'direction', 'legacySceneNotes',
-  'manuscriptMemory', 'autoMemory', 'lorebook', 'search', 'memoryModel', 'revisionModel', ...promptKeys,
+  'manuscriptMemory', 'autoMemory', 'lorebook', 'search', ...optionalProjectModels, ...promptKeys,
 ]
 const cardKeys = ['id', 'name', 'aliases', 'kind', 'description', 'priority', 'always']
 
@@ -52,7 +51,7 @@ export function hasSceneNote(note) {
 }
 
 export function validProjectBase(project) {
-  return record(project) && limited(project.id, 100) && Boolean(project.id) && validModel(project.model) &&
+  return record(project) && limited(project.id, 100) && Boolean(project.id) && validModelId(project.model) &&
     writingTokenLimits.includes(project.maxTokens) && ['title', 'synopsis', 'worldNotes'].every(key =>
       typeof project[key] === 'string') && optional(project.characterNotes, value => typeof value === 'string') &&
     validPrompts(project)
@@ -61,8 +60,8 @@ export function validProjectBase(project) {
 export function validProject(project) {
   if (!validProjectBase(project) || typeof project.manuscript !== 'string' || typeof project.direction !== 'string') return false
   return optional(project.autoMemory, validBoolean) && optional(project.lorebook, validLore) &&
-    optional(project.memoryModel, validModel) && optional(project.revisionModel, validModel) &&
-    optional(project.search, value => record(value) && validBoolean(value.enabled) && validModel(value.model)) &&
+    optionalProjectModels.every(key => optional(project[key], validModelId)) &&
+    optional(project.search, value => record(value) && validBoolean(value.enabled) && validModelId(value.model)) &&
     optional(project.legacySceneNotes, notes => Array.isArray(notes) && notes.every(hasSceneNote)) &&
     optional(project.manuscriptMemory, memo => record(memo) && limited(memo.text, writingFields.manuscriptMemory) &&
       validBoolean(memo.stale) && Number.isSafeInteger(memo.through) && memo.through >= 0 &&

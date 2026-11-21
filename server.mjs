@@ -25,9 +25,12 @@ const hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`])
 const assets = new Map([
   ['/', ['writer.html', 'text/html; charset=utf-8']],
   ['/chat', ['index.html', 'text/html; charset=utf-8']],
+  ['/settings', ['settings.html', 'text/html; charset=utf-8']],
+  ['/settings.js', ['settings.js', 'text/javascript; charset=utf-8']],
   ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
   ['/writer.js', ['writer.js', 'text/javascript; charset=utf-8']],
   ['/writing-config.mjs', ['writing-config.mjs', 'text/javascript; charset=utf-8']],
+  ['/writing-workspace.mjs', ['writing-workspace.mjs', 'text/javascript; charset=utf-8']],
   ['/manuscript-memory.mjs', ['manuscript-memory.mjs', 'text/javascript; charset=utf-8']],
   ['/retrieval.mjs', ['retrieval.mjs', 'text/javascript; charset=utf-8']],
   ['/embedding-index.mjs', ['embedding-index.mjs', 'text/javascript; charset=utf-8']],
@@ -37,6 +40,7 @@ const assets = new Map([
   ['/completion.js', ['completion.js', 'text/javascript; charset=utf-8']],
   ['/styles.css', ['styles.css', 'text/css; charset=utf-8']],
   ['/writer.css', ['writer.css', 'text/css; charset=utf-8']],
+  ['/settings.css', ['settings.css', 'text/css; charset=utf-8']],
 ])
 
 const upstreamErrors = {

@@ -6,7 +6,9 @@
   <meta name="theme-color" content="#f7f8fc">
   <title>Relay · OpenRouter 채팅</title>
   <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/settings.css">
   <script type="module" src="/app.js"></script>
+  <script type="module" src="/settings.js"></script>
 </head>
 <body>
   <header class="topbar">
@@ -17,6 +19,7 @@
     </div>
     <div class="topbar-actions">
       <a class="outline-button" href="/">집필실</a>
+      <a class="outline-button" href="/settings#chat-settings" data-open-settings aria-haspopup="dialog">설정</a>
       <button class="outline-button" id="new-chat" type="button" disabled>
         <span class="icon-plus" aria-hidden="true"></span> 새 대화
       </button>
@@ -27,14 +30,13 @@
     <aside class="sidebar" aria-labelledby="model-title">
       <div class="model-panel">
         <h2 id="model-title">응답 모델</h2>
-        <button type="button" id="choose-model" class="selected-model" aria-haspopup="dialog">
+        <div class="selected-model">
           <span class="model-icon" aria-hidden="true"></span>
           <span class="model-label">
             <strong id="selected-name">Free Models Router</strong>
             <span id="selected-id">openrouter/free</span>
           </span>
-          <span class="chevron" aria-hidden="true"></span>
-        </button>
+        </div>
         <p id="selected-price" class="model-price">사용 가능한 무료 모델을 자동으로 선택해요.</p>
       </div>
       <div class="connection" id="connection" role="status">
@@ -50,7 +52,7 @@
           <section class="welcome" aria-labelledby="welcome-heading">
             <div class="welcome-copy">
               <h1 id="welcome-heading">어떤 질문부터<br>시작할까요?</h1>
-              <p>모델을 고르고 질문을 보내보세요.</p>
+              <p>메시지를 입력하거나 아래 질문으로 대화를 시작하세요.</p>
             </div>
             <div class="route-art" aria-hidden="true">
               <div class="route-source"><i></i><i></i></div>
@@ -109,21 +111,5 @@
     </main>
   </div>
 
-  <dialog id="model-dialog" aria-labelledby="dialog-title">
-    <div class="dialog-header">
-      <h2 id="dialog-title">모델 선택</h2>
-      <form method="dialog"><button type="submit" class="close-button" aria-label="닫기">×</button></form>
-    </div>
-    <div class="model-query">
-      <label class="visually-hidden" for="model-search">모델 검색</label>
-      <input id="model-search" type="search" placeholder="모델 이름 또는 ID 검색" autocomplete="off" autofocus>
-      <div class="filters" role="group" aria-label="가격 필터">
-        <button type="button" data-free="true" aria-pressed="true">무료</button>
-        <button type="button" data-free="false" aria-pressed="false">전체</button>
-      </div>
-    </div>
-    <p class="model-list-status" id="model-list-status" role="status"></p>
-    <ul class="model-list" id="model-list"></ul>
-  </dialog>
 </body>
 </html>

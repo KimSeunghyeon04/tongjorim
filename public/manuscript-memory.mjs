@@ -1,5 +1,5 @@
 import { requestCompletion } from './completion.js'
-import { memoryExcerptLimit, writingFieldPrefix, writingFields } from './writing-config.mjs'
+import { memoryExcerptLimit, modelFor, writingFieldPrefix, writingFields } from './writing-config.mjs'
 
 export function memoryReadThrough(project) {
   return project.manuscriptMemory?.stale ? 0 : project.manuscriptMemory?.through ?? 0
@@ -8,8 +8,6 @@ export function memoryReadThrough(project) {
 export function memoryForPrompt(project) {
   return memoryReadThrough(project) ? project.manuscriptMemory.text : ''
 }
-
-export const modelFor = (project, purpose) => project[`${purpose}Model`] ?? project.model
 
 export function setManuscriptText(project, value) {
   const through = memoryReadThrough(project)

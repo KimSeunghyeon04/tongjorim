@@ -1,11 +1,12 @@
-import { freeModel, pricing, requestCompletion } from './completion.js'
+import { freeModel, requestCompletion, settingsChangeEvent } from './completion.js'
 import {
-  completionPayload, defaultMemoryPrompt, defaultNoteSystemPrompt, defaultRevisionPrompt, defaultSystemPrompt,
-  effectiveSystemPrompt, memoryOutputLimit, normalizeLineEndings, noteIdeaLimit, noteKinds, projectNotesForRequest, referenceLabels,
+  appendParagraphs, completionPayload, defaultMemoryPrompt, defaultNoteSystemPrompt, defaultRevisionPrompt, defaultSystemPrompt,
+  effectiveSystemPrompt, memoryOutputLimit, modelFor, normalizeLineEndings, noteIdeaLimit, noteKinds, projectNotesForRequest, referenceLabels,
   systemPromptLimit, writingFieldPrefix, writingFields,
 } from './writing-config.mjs'
-import { memoryForPrompt, memoryReadThrough, memoryRequest, modelFor, setManuscriptText, updateManuscriptMemory } from './manuscript-memory.mjs'
-import { exportPack, exportProject, hasSceneNote, normalizeProjectManuscript, readPack, readProject, validProject, validProjectBase } from './project-files.mjs'
+import { memoryForPrompt, memoryReadThrough, memoryRequest, setManuscriptText, updateManuscriptMemory } from './manuscript-memory.mjs'
+import { exportPack, exportProject, readPack, readProject } from './project-files.mjs'
+import { currentProjectOf, makeProject, mergeModelSettings, projectName, readWorkspace, storageKey } from './writing-workspace.mjs'
 import { refsFor, setupResearch, writingBody } from './research-panel.mjs'
 import { activeLore, paragraphRanges } from './retrieval.mjs'
 import { combineUsage, completionEstimate, estimateLabel, jsonRequest, usageLabel } from './request-tools.mjs'
@@ -22,8 +23,6 @@ const noteFields = {
   'character-notes': 'characterNotes',
   'world-notes': 'worldNotes',
 }
-const modelSelect = get('writing-model')
-const limitSelect = get('writing-limit')
 const generate = get('generate')
 const proposalSection = get('proposal')
 const proposalBody = get('proposal-body')
@@ -43,9 +42,6 @@ const memoryStop = get('memory-stop')
 const memoryStatus = get('memory-status')
 const memoryShortStatus = get('memory-short-status')
 const memoryText = get('memory-text')
-// Use the same storage key so older tabs detect the migration before saving.
-const storageKey = 'relay.writing.v1'
-const workspaceVersion = 2
 const formatNumber = new Intl.NumberFormat('ko-KR')
 const previews = new Map()
 const plans = new WeakMap()
@@ -59,69 +55,20 @@ let savedVersion
 let storageReadable = true
 let storageWarning = ''
 
-function makeProject(title = '제목 없는 소설') {
-  return {
-    id: crypto.randomUUID(), title, synopsis: '', characterNotes: '', worldNotes: '',
-    model: freeModel.id, maxTokens: 2048, manuscript: '', direction: '',
-  }
-}
-
-function sampleWorkspace() {
-  const sample = makeProject('안개 항로 (예시)')
-  sample.manuscript = [
-    '안개가 걷히기도 전에 항구의 시계가 다섯 번 울었다. 서윤은 표를 쥔 손을 코트 주머니에 넣었다. 선착장 끝에는 행선지를 적지 않은 배가 한 척 떠 있었다.',
-    '선장이 그녀의 표를 받더니 표 뒷면을 들여다보았다. 서윤도 그제야 거기에 낯선 글씨가 있다는 걸 알았다.',
-    '「돌아오는 편은 한 사람만.」',
-  ].join('\n\n')
-  sample.direction = '선장은 이 문장을 이미 알고 있다. 서로 모르는 척하는 두 사람의 짧은 대화로 장면을 이어간다.'
-  sample.synopsis = '항해 지도에 없는 섬에서 편지가 도착한다. 실종된 오빠가 보낸 편지라고 믿는 서윤은 새벽 여객선에 오른다.'
-  sample.characterNotes = '서윤: 지도 복원가. 낯선 표식은 쉽게 지나치지 않지만 사람의 속뜻을 바로 묻지는 않는다.\n선장: 이름을 밝히지 않는다. 행선지에 관해 짧게만 답한다.'
-  sample.worldNotes = '배경: 늦가을 항구. 서윤의 시점에서 과거형으로 서술한다.'
-  return { version: workspaceVersion, activeProjectId: sample.id, projects: [sample] }
-}
-
-function mergeProjectScenes({ scenes, activeSceneId, ...project }) {
-  const activeScene = scenes.find(scene => scene.id === activeSceneId) ?? scenes[0]
-  return {
-    ...project,
-    manuscript: scenes.reduce((text, scene) => appendParagraphs(text, normalizeLineEndings(scene.text)), ''),
-    direction: activeScene.direction,
-    legacySceneNotes: scenes.flatMap((scene, index) => scene.title || scene.direction ? [{
-      title: scene.title || `장면 ${index + 1}`,
-      direction: scene.direction,
-    }] : []),
-  }
-}
-
 function loadWorkspace() {
   try {
     savedVersion = localStorage.getItem(storageKey)
-    if (savedVersion === null) return sampleWorkspace()
-    const data = JSON.parse(savedVersion)
-    if (![1, workspaceVersion].includes(data?.version) || !Array.isArray(data.projects) || !data.projects.length ||
-        !data.projects.every(validProjectBase)) {
-      throw new Error('Unknown workspace')
-    }
-    if (data.version === 1 && data.projects.every(project => Array.isArray(project.scenes) &&
-        project.scenes.length && project.scenes.every(scene => hasSceneNote(scene) &&
-          typeof scene.id === 'string' && typeof scene.text === 'string'))) {
-      return { ...data, version: workspaceVersion, projects: data.projects.map(mergeProjectScenes) }
-    }
-    if (data.version === workspaceVersion && data.projects.every(validProject)) {
-      data.projects.forEach(normalizeProjectManuscript)
-      return data
-    }
-    throw new Error('Unknown workspace')
+    return readWorkspace(savedVersion)
   } catch {
     storageReadable = false
     storageWarning = '저장된 작업 공간을 열 수 없어요. 이 창에서 편집한 원고는 TXT로 내보낼 수 있어요.'
-    return { version: workspaceVersion, activeProjectId: '', projects: [makeProject()] }
+    const project = makeProject()
+    return { activeProjectId: project.id, projects: [project] }
   }
 }
 
 const workspace = loadWorkspace()
-const currentProject = () => workspace.projects.find(project => project.id === workspace.activeProjectId) ?? workspace.projects[0]
-const projectName = project => project.title.trim() || '제목 없는 소설'
+const currentProject = () => currentProjectOf(workspace)
 
 function showStorageStatus() {
   const error = get('storage-error')
@@ -131,10 +78,26 @@ function showStorageStatus() {
   if (get('save-status').textContent !== label) get('save-status').textContent = label
 }
 
+function syncSavedWorkspace(latest) {
+  if (latest === savedVersion) return true
+  if (!storageReadable) return false
+  let changed
+  try {
+    changed = mergeModelSettings(workspace, savedVersion, latest)
+  } catch {
+    return false
+  }
+  if (!changed) return false
+  savedVersion = latest
+  storageWarning = ''
+  if (changed.has(currentProject().id)) writingInputsChanged()
+  return true
+}
+
 function saveWorkspace() {
   if (storageReadable) {
     try {
-      if (localStorage.getItem(storageKey) !== savedVersion) {
+      if (!syncSavedWorkspace(localStorage.getItem(storageKey))) {
         storageWarning = '다른 탭에서 작품이 바뀌었어요. 이 탭에서 수정한 내용을 TXT로 내보낸 뒤 새로고침해 주세요.'
       } else {
         const nextVersion = JSON.stringify(workspace)
@@ -175,26 +138,6 @@ function renderLegacySceneNotes(notes = []) {
   }))
 }
 
-function renderModels() {
-  const project = currentProject()
-  for (const [select, purpose] of [[modelSelect, ''], [get('memory-model'), 'memory'], [get('revision-model'), 'revision']]) {
-    const selected = purpose ? project[`${purpose}Model`] ?? '' : project.model
-    const groups = ['무료', '유료 또는 가격 미확인'].map(label => Object.assign(document.createElement('optgroup'), { label }))
-    for (const model of models) groups[model.free ? 0 : 1].append(new Option(model.name || model.id, model.id))
-    select.replaceChildren(...(purpose ? [new Option('이어쓰기 모델 사용', '')] : []), ...groups.filter(group => group.children.length))
-    if (selected && !models.some(model => model.id === selected)) select.append(new Option(selected, selected))
-    select.value = selected
-  }
-  updateModelPrice()
-  renderEstimates()
-}
-
-function updateModelPrice() {
-  const model = models.find(item => item.id === modelSelect.value)
-  get('model-cost').textContent = model?.id === freeModel.id ? '사용 가능한 무료 모델을 자동으로 선택해요.'
-    : model ? pricing(model) : '가격 정보 없음'
-}
-
 function switchPanel(name) {
   for (const button of document.querySelectorAll('[data-panel]')) {
     button.setAttribute('aria-pressed', String(button.dataset.panel === name))
@@ -215,7 +158,6 @@ function renderWorkspace() {
   revisionSelection = undefined
   get('revision-direction').value = ''
   renderProjectSelect()
-  renderModels()
   projectTitle.value = project.title
   manuscript.value = project.manuscript
   manuscript.scrollTop = manuscript.scrollHeight
@@ -227,18 +169,18 @@ function renderWorkspace() {
   }
   renderLegacySceneNotes(project.legacySceneNotes)
   renderPromptEditor()
-  limitSelect.value = String(project.maxTokens)
   updateCharacterCount()
   renderProposal()
   renderPlanner()
   renderMemory()
   research.render()
+  renderEstimates()
   syncControls()
 }
 
 function syncControls() {
   const busy = Boolean(activeRequest || activePlanRequest)
-  for (const element of [generate, projectSelect, get('add-project'), modelSelect, limitSelect, get('open-files'), get('revision-model')]) {
+  for (const element of [generate, projectSelect, get('add-project'), get('open-files')]) {
     element.disabled = busy
   }
   get('preview-request').disabled = busy || Boolean(activePreview)
@@ -261,13 +203,6 @@ function renderProposal() {
   proposalBody.hidden = !preview.text.trim()
   proposalBody.textContent = preview.text
   updateProposalActions()
-}
-
-function appendParagraphs(original, text) {
-  if (!original || !text) return original + text
-  const trailing = original.endsWith('\n\n') ? 2 : Number(original.endsWith('\n'))
-  const leading = text.startsWith('\n\n') ? 2 : Number(text.startsWith('\n'))
-  return original + '\n'.repeat(Math.max(0, 2 - trailing - leading)) + text
 }
 
 function updateProposalActions() {
@@ -295,7 +230,7 @@ async function loadCatalog() {
     const data = await response.json()
     if (!Array.isArray(data.models)) throw new Error('Catalog is invalid')
     models = data.models
-    renderModels()
+    renderEstimates()
     if (!data.catalogAvailable) throw new Error('Catalog unavailable')
     label.textContent = data.keyConfigured ? '모델 목록 연결됨' : 'API 키 설정 필요'
     get('connection-dot').dataset.state = data.keyConfigured ? 'online' : 'offline'
@@ -334,6 +269,7 @@ function estimate(payload) {
 
 function renderEstimates() {
   const project = currentProject()
+  get('writing-model-name').textContent = models.find(model => model.id === project.model)?.name ?? project.model
   const keys = refsFor(project).filter(ref => ref.enabled).map(ref => ref.key)
   const direction = writingFieldPrefix('direction', project.direction)
   const lore = keys.includes('lorebook') ? activeLore(project.lorebook ?? [], project.manuscript, direction) : { text: '' }
@@ -624,7 +560,7 @@ async function generateNoteDraft() {
 
   try {
     const result = await requestCompletion('/api/plan', {
-      model: project.model,
+      model: modelFor(project, 'plan'),
       maxTokens: project.maxTokens,
       target: draft.target,
       idea: plan.idea.trim(),
@@ -892,27 +828,6 @@ resetSystemPrompt.addEventListener('click', () => {
   systemPrompt.focus()
   get('system-prompt-status').textContent = '기본 시스템 프롬프트를 복원했어요.'
 })
-modelSelect.addEventListener('change', () => {
-  currentProject().model = modelSelect.value
-  updateModelPrice()
-  saveWorkspace()
-  writingInputsChanged()
-})
-for (const purpose of ['memory', 'revision']) {
-  get(`${purpose}-model`).addEventListener('change', event => {
-    const project = currentProject()
-    if (event.target.value) project[`${purpose}Model`] = event.target.value
-    else delete project[`${purpose}Model`]
-    saveWorkspace()
-    writingInputsChanged()
-  })
-}
-limitSelect.addEventListener('change', () => {
-  currentProject().maxTokens = Number(limitSelect.value)
-  saveWorkspace()
-  writingInputsChanged()
-})
-
 projectSelect.addEventListener('change', () => {
   workspace.activeProjectId = projectSelect.value
   renderWorkspace()
@@ -1033,11 +948,18 @@ bindProjectImport('import-pack', readPack, (settings, project) => {
   Object.assign(project, settings)
   return `‘${projectName(project)}’에 선택한 설정을 적용했어요.`
 })
-window.addEventListener('storage', event => {
-  if (event.key === storageKey || event.key === null) {
+function syncWorkspaceFromStorage() {
+  if (!syncSavedWorkspace(localStorage.getItem(storageKey))) {
     storageWarning = '다른 탭에서 작품을 수정했어요. 이 탭의 원고를 내보내거나 새로고침해 주세요.'
-    showStorageStatus()
   }
+  showStorageStatus()
+}
+
+window.addEventListener('storage', event => {
+  if (event.key === storageKey || event.key === null) syncWorkspaceFromStorage()
+})
+document.addEventListener(settingsChangeEvent, event => {
+  if (event.detail === storageKey) syncWorkspaceFromStorage()
 })
 get('refresh-catalog').addEventListener('click', loadCatalog)
 renderWorkspace()

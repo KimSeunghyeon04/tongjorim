@@ -7,7 +7,9 @@
   <title>Relay 집필실</title>
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/writer.css">
+  <link rel="stylesheet" href="/settings.css">
   <script type="module" src="/writer.js"></script>
+  <script type="module" src="/settings.js"></script>
 </head>
 <body class="writer">
   <header class="topbar">
@@ -18,6 +20,7 @@
     </div>
     <div class="topbar-actions">
       <a href="/chat" class="chat-link">채팅</a>
+      <a href="/settings" class="chat-link" data-open-settings aria-haspopup="dialog">설정</a>
       <button class="outline-button" id="open-files" type="button">
         <span class="download-icon" aria-hidden="true"></span>작품 파일
       </button>
@@ -120,22 +123,10 @@
             <option value="once">이번 분량에만 적용</option>
           </select>
         </div>
-        <div class="writing-input">
-          <label for="writing-model">이어쓰기 모델</label>
-          <select class="writing-field" id="writing-model"></select>
-          <p class="field-hint" id="model-cost"></p>
-        </div>
-        <div class="writing-input">
-          <label for="writing-limit">생성 한도</label>
-          <select class="writing-field" id="writing-limit">
-            <option value="1024">1,024 토큰</option>
-            <option value="2048">2,048 토큰</option>
-            <option value="4096">4,096 토큰</option>
-          </select>
-        </div>
         <div class="generation-actions">
           <button class="writing-primary" id="generate" type="submit">이어서 쓰기</button>
           <button class="outline-button" id="preview-request" type="button">요청 미리보기</button>
+          <p class="field-hint" id="writing-model-name"></p>
           <p class="field-hint" id="writing-estimate"></p>
           <p class="field-hint" id="writing-context-limit" role="status" hidden></p>
         </div>
@@ -147,10 +138,6 @@
           <summary>선택 문단 퇴고</summary>
           <div class="memory-controls">
             <p class="field-hint" id="revision-selection">원고에서 퇴고할 한 문단의 일부를 선택해 주세요.</p>
-            <div class="writing-input">
-              <label for="revision-model">퇴고 모델</label>
-              <select class="writing-field" id="revision-model"></select>
-            </div>
             <div class="writing-input">
               <label for="revision-direction">퇴고 지시</label>
               <textarea class="writing-field" id="revision-direction" rows="3" maxlength="1200"></textarea>
@@ -170,10 +157,6 @@
           <div class="memory-controls">
             <p class="field-hint">원고의 사건, 인물 상태와 복선을 정리해 다음 이어쓰기에 사용해요.</p>
             <label class="memory-auto"><input id="memory-auto" type="checkbox"> 원고에 추가할 때 자동 갱신</label>
-            <div class="writing-input">
-              <label for="memory-model">메모 갱신 모델</label>
-              <select class="writing-field" id="memory-model"></select>
-            </div>
             <p class="field-hint">갱신할 원고는 OpenRouter를 통해 선택한 모델로 전송돼요.</p>
             <p class="field-hint" id="memory-estimate"></p>
             <p class="field-hint" id="memory-usage"></p>
@@ -282,11 +265,6 @@
             <p class="field-hint" id="search-state" role="status"></p>
             <p class="field-hint" id="embedding-consent">의미 검색을 켜면 과거 문단과 이번 지시를 OpenRouter에 보냅니다. ‘최근 원고’를 켠 경우 검색어에 최근 문단 일부도 포함됩니다. 색인 및 검색에 별도 비용이 발생할 수 있어요.</p>
             <label class="memory-auto"><input id="semantic-enabled" type="checkbox" aria-describedby="embedding-consent"> 의미 검색 켜기</label>
-            <div class="writing-input" id="embedding-model-settings" hidden>
-              <label for="embedding-model">임베딩 모델</label>
-              <select class="writing-field" id="embedding-model"></select>
-              <p class="field-hint" id="embedding-catalog-status" role="status"></p>
-            </div>
             <p class="field-hint" id="embedding-estimate"></p>
             <p class="field-hint" id="embedding-usage"></p>
             <button class="outline-button" id="retry-search" type="button">다시 검색</button>

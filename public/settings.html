@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f7f8fc">
+  <title>Relay 설정</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/settings.css">
+  <script type="module" src="/settings.js"></script>
+</head>
+<body class="settings">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-icon" aria-hidden="true"><i></i><i></i></span>
+      <span>Relay</span>
+    </div>
+    <nav class="topbar-actions" aria-label="작업 공간">
+      <a class="outline-button" href="/">집필실</a>
+      <a class="outline-button" href="/chat">채팅</a>
+    </nav>
+  </header>
+
+  <main class="settings-main">
+    <div class="settings-heading">
+      <h1>설정</h1>
+      <p class="settings-status" id="settings-status" role="status">변경 사항은 이 브라우저에 자동으로 저장돼요.</p>
+    </div>
+
+    <section class="settings-section" aria-labelledby="writing-section-title">
+      <header class="settings-section-heading">
+        <div>
+          <h2 id="writing-section-title">집필실</h2>
+          <p>모델과 생성 한도를 작품별로 관리해요.</p>
+        </div>
+        <div class="settings-project">
+          <label for="settings-project">작품</label>
+          <select id="settings-project" class="settings-select" disabled></select>
+        </div>
+      </header>
+      <p class="settings-error" id="workspace-error" role="alert" hidden></p>
+      <div class="settings-row">
+        <h3 id="writing-model-label">이어쓰기 모델</h3>
+        <button class="selected-model" type="button" data-model="model" aria-labelledby="writing-model-label writing-model-value" aria-haspopup="dialog" disabled>
+          <span class="model-label"><strong id="writing-model-value"></strong><span></span></span><span class="chevron" aria-hidden="true"></span>
+        </button>
+      </div>
+      <div class="settings-row">
+        <h3 id="revision-model-label">문단 퇴고 모델</h3>
+        <button class="selected-model" type="button" data-model="revisionModel" aria-labelledby="revision-model-label revision-model-value" aria-haspopup="dialog" disabled>
+          <span class="model-label"><strong id="revision-model-value"></strong><span></span></span><span class="chevron" aria-hidden="true"></span>
+        </button>
+      </div>
+      <div class="settings-row">
+        <h3 id="memory-model-label">원고 메모 갱신 모델</h3>
+        <button class="selected-model" type="button" data-model="memoryModel" aria-labelledby="memory-model-label memory-model-value" aria-haspopup="dialog" disabled>
+          <span class="model-label"><strong id="memory-model-value"></strong><span></span></span><span class="chevron" aria-hidden="true"></span>
+        </button>
+      </div>
+      <div class="settings-row">
+        <h3 id="plan-model-label">메모 작성 도우미 모델</h3>
+        <button class="selected-model" type="button" data-model="planModel" aria-labelledby="plan-model-label plan-model-value" aria-haspopup="dialog" disabled>
+          <span class="model-label"><strong id="plan-model-value"></strong><span></span></span><span class="chevron" aria-hidden="true"></span>
+        </button>
+      </div>
+      <div class="settings-row">
+        <div>
+          <h3 id="embedding-model-label">임베딩 모델</h3>
+          <p id="embedding-model-hint">참고 자료에서 의미 검색을 켜면 사용해요.</p>
+        </div>
+        <button class="selected-model" type="button" data-model="embedding" aria-labelledby="embedding-model-label embedding-model-value" aria-describedby="embedding-model-hint" aria-haspopup="dialog" disabled>
+          <span class="model-label"><strong id="embedding-model-value"></strong><span></span></span><span class="chevron" aria-hidden="true"></span>
+        </button>
+      </div>
+      <div class="settings-row">
+        <div>
+          <label for="generation-limit">생성 한도</label>
+          <p id="generation-limit-hint">이어쓰기, 퇴고, 메모 작성 도우미의 최대 출력 토큰 수예요.</p>
+        </div>
+        <select id="generation-limit" class="settings-select" aria-describedby="generation-limit-hint" disabled></select>
+      </div>
+    </section>
+
+    <section class="settings-section" id="chat-settings" aria-labelledby="chat-section-title">
+      <header class="settings-section-heading">
+        <div>
+          <h2 id="chat-section-title">채팅</h2>
+          <p>이 브라우저의 모든 채팅에 적용돼요.</p>
+        </div>
+      </header>
+      <div class="settings-row">
+        <h3 id="chat-model-label">채팅 응답 모델</h3>
+        <button class="selected-model" type="button" data-model="chat" aria-labelledby="chat-model-label chat-model-value" aria-haspopup="dialog" disabled>
+          <span class="model-label"><strong id="chat-model-value"></strong><span></span></span><span class="chevron" aria-hidden="true"></span>
+        </button>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="model-dialog" aria-labelledby="dialog-title">
+    <div class="dialog-header">
+      <h2 id="dialog-title">모델 선택</h2>
+      <form method="dialog"><button type="submit" class="close-button" aria-label="닫기">×</button></form>
+    </div>
+    <div class="model-query">
+      <label class="visually-hidden" for="model-search">모델 검색</label>
+      <input id="model-search" type="search" placeholder="모델 이름 또는 ID 검색" autocomplete="off" autofocus>
+      <div class="filters" id="model-filters" role="group" aria-label="가격 필터">
+        <button type="button" data-free="false" aria-pressed="true">전체</button>
+        <button type="button" data-free="true" aria-pressed="false">무료</button>
+      </div>
+    </div>
+    <div class="model-dialog-status">
+      <p id="model-list-status" role="status"></p>
+      <button class="text-button" id="retry-catalog" type="button" hidden>목록 다시 불러오기</button>
+      <p id="model-save-error" role="alert" hidden></p>
+    </div>
+    <ul class="model-list" id="model-list" aria-label="선택 가능한 모델"></ul>
+  </dialog>
+</body>
+</html>

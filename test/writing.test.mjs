@@ -4,6 +4,7 @@ import { exportPack, exportProject, readPack, readProject } from '../public/proj
 import { activeLore, chunkManuscript, retrievalInput, searchPast } from '../public/retrieval.mjs'
 import { actualUsage, combineUsage, estimateUsage } from '../public/request-tools.mjs'
 import { projectNotesForRequest, writingFieldPrefix } from '../public/writing-config.mjs'
+import { mergeModelSettings } from '../public/writing-workspace.mjs'
 import { manuscript, passages, queries } from '../scripts/retrieval-fixture.mjs'
 
 test('한국어 로어북 조사와 이름 경계, 별칭, 우선순위와 입력 한도', () => {
@@ -102,7 +103,7 @@ test('백업 형식, 복원 ID, AI 메모 위치와 선택 설정', () => {
   const project = {
     id: 'original', title: '저편', manuscript: '나래가 도착했다.', direction: '문을 열어', authorMode: 'once',
     synopsis: '줄거리', worldNotes: '세계관', characterNotes: '인물', model: 'qa/write', maxTokens: 1024,
-    memoryModel: 'qa/memory', revisionModel: 'qa/revision', search: { enabled: false, model: 'qa/embedding' },
+    memoryModel: 'qa/memory', revisionModel: 'qa/revision', planModel: 'qa/plan', search: { enabled: false, model: 'qa/embedding' },
     systemPrompt: '이어쓰기 지시', notePrompts: { revision: '퇴고 지시', memory: '메모 지시' },
     autoMemory: true, manuscriptMemory: { text: '도착함', through: 9, stale: false }, lorebook: [],
   }
@@ -129,6 +130,33 @@ test('백업 복원 시 원고 줄바꿈과 AI 메모가 읽은 위치를 함께
   assert.equal(restored.manuscript, '가\n나\n다\n\n라')
   assert.deepEqual(restored.manuscriptMemory, { text: '가, 나, 다', through: 5, stale: false })
   assert.equal(restored.manuscript.slice(restored.manuscriptMemory.through), '\n\n라')
+})
+
+test('다른 탭의 모델 설정을 적용할 때 원고와 검색 상태를 보존한다', () => {
+  const project = {
+    id: 'original', title: '저편', synopsis: '', worldNotes: '', manuscript: '처음 원고', direction: '',
+    model: 'qa/write', maxTokens: 2048, revisionModel: 'qa/revision',
+  }
+  const other = { ...project, id: 'other', title: '다른 작품' }
+  const saved = { version: 2, activeProjectId: project.id, projects: [project, other] }
+  const live = structuredClone(saved)
+  const editing = live.projects[0]
+  editing.manuscript = '편집 중인 원고'
+  editing.search = { enabled: true, model: 'qwen/qwen3-embedding-4b' }
+
+  const changed = { ...project, model: 'qa/other', maxTokens: 1024, planModel: 'qa/plan',
+    search: { enabled: false, model: 'qa/embedding' } }
+  delete changed.revisionModel
+  const next = { ...saved, projects: [changed, other] }
+  assert.deepEqual(mergeModelSettings(live, JSON.stringify(saved), JSON.stringify(next)), new Set(['original']))
+  assert.equal(live.projects[0], editing)
+  assert.deepEqual(editing, { ...changed, manuscript: '편집 중인 원고', search: { enabled: true, model: 'qa/embedding' } })
+  assert.deepEqual(live.projects[1], other)
+
+  const conflict = { ...next, projects: [{ ...changed, manuscript: '다른 탭에서 편집한 원고', maxTokens: 4096 }, other] }
+  assert.equal(mergeModelSettings(live, JSON.stringify(next), JSON.stringify(conflict)), false)
+  assert.equal(editing.maxTokens, 1024)
+  assert.equal(editing.manuscript, '편집 중인 원고')
 })
 
 test('복원된 메모의 원본을 보존하고 AI 요청에는 필드 한도까지 담는다', () => {

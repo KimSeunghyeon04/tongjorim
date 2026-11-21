@@ -2,6 +2,7 @@ import { writingFields } from './writing-config.mjs'
 
 export const loreKinds = { character: '인물', place: '장소', event: '사건', clue: '복선' }
 export const defaultEmbeddingModel = 'qwen/qwen3-embedding-4b'
+export const searchFor = project => project.search ?? { enabled: false, model: defaultEmbeddingModel }
 export const embeddingBatchSize = 16
 export const embeddingQueryLimit = 2400
 export const chunkLimit = 900

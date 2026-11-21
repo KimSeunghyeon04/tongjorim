@@ -1,4 +1,4 @@
-import { freeModel, pricing, requestCompletion } from './completion.js'
+import { chatModelKey, freeModel, pricing, requestCompletion, savedChatModel, settingsChangeEvent } from './completion.js'
 
 const byId = id => document.getElementById(id)
 const form = byId('chat-form')
@@ -6,72 +6,29 @@ const prompt = byId('prompt')
 const send = byId('send')
 const stop = byId('stop')
 const newChat = byId('new-chat')
-const chooseModel = byId('choose-model')
 const reloadModels = byId('reload-models')
-const dialog = byId('model-dialog')
-const search = byId('model-search')
-const modelList = byId('model-list')
 const messages = byId('messages')
 const conversation = byId('conversation')
 const retry = byId('retry-chat')
 const chatStatus = byId('chat-status')
 
 let selectedModel = freeModel
-let catalog = [selectedModel]
+let catalog = [freeModel]
 let catalogStatus = 'loading'
 let keyConfigured
-let freeOnly = true
 let activeRequest
 let retryTurn
 const history = []
 const tokenFormat = new Intl.NumberFormat('ko-KR')
 
 function updateModel() {
+  const id = savedChatModel()
+  selectedModel = catalog.find(model => model.id === id) ?? { id, name: id }
   byId('selected-name').textContent = selectedModel.name
   byId('selected-id').textContent = selectedModel.id
   byId('selected-price').textContent = selectedModel.id === 'openrouter/free'
     ? '사용 가능한 무료 모델을 자동으로 선택해요.'
     : pricing(selectedModel)
-}
-
-function renderModels() {
-  const query = search.value.trim().toLowerCase()
-  const visible = catalog.filter(model => (!freeOnly || model.free) &&
-    `${model.name} ${model.id}`.toLowerCase().includes(query))
-  const status = byId('model-list-status')
-  status.textContent = catalogStatus === 'loading' ? '모델 목록을 불러오는 중이에요.'
-    : catalogStatus === 'offline' ? '최신 목록을 불러오지 못했어요.'
-    : visible.length ? '' : '일치하는 모델이 없어요.'
-  status.hidden = !status.textContent
-
-  const items = document.createDocumentFragment()
-  for (const model of visible) {
-    const item = document.createElement('li')
-    const button = document.createElement('button')
-    const details = document.createElement('span')
-    const name = document.createElement('strong')
-    const id = document.createElement('span')
-    const price = document.createElement('span')
-    name.textContent = model.name
-    id.textContent = model.id
-    details.className = 'model-option-label'
-    details.append(name, id)
-    price.className = model.free ? 'option-price free-price' : 'option-price'
-    price.textContent = pricing(model)
-    button.type = 'button'
-    button.className = 'model-option'
-    button.setAttribute('aria-pressed', String(model.id === selectedModel.id))
-    button.append(details, price)
-    button.addEventListener('click', () => {
-      selectedModel = model
-      updateModel()
-      dialog.close()
-    })
-    item.append(button)
-    items.append(item)
-  }
-  modelList.replaceChildren(items)
-  modelList.scrollTop = 0
 }
 
 async function loadModels() {
@@ -88,7 +45,6 @@ async function loadModels() {
     catalog = data.models
     keyConfigured = data.keyConfigured
     catalogStatus = data.catalogAvailable ? 'online' : 'offline'
-    selectedModel = catalog.find(model => model.id === selectedModel.id) ?? selectedModel
     updateModel()
   } catch {
     catalogStatus = 'offline'
@@ -98,7 +54,6 @@ async function loadModels() {
   label.textContent = keyConfigured === false ? 'API 키 설정 필요'
     : catalogStatus === 'online' ? '모델 목록 연결됨' : '모델 목록 연결 실패'
   reloadModels.hidden = catalogStatus !== 'offline'
-  if (dialog.open) renderModels()
 }
 
 function showNotice(message = '', canRetry = false) {
@@ -112,7 +67,6 @@ function syncControls() {
   stop.hidden = !activeRequest
   send.disabled = !prompt.value.trim()
   newChat.disabled = messages.hidden || Boolean(activeRequest)
-  chooseModel.disabled = Boolean(activeRequest)
 }
 
 function appendMessage(name, kind, content) {
@@ -148,6 +102,7 @@ function nearEnd() {
 
 async function runTurn(turn) {
   if (activeRequest) return
+  updateModel()
   const model = selectedModel
   const controller = new AbortController()
   activeRequest = controller
@@ -273,20 +228,12 @@ newChat.addEventListener('click', () => {
   prompt.focus()
 })
 
-chooseModel.addEventListener('click', () => {
-  search.value = ''
-  renderModels()
-  dialog.showModal()
+window.addEventListener('storage', event => {
+  if (event.key === chatModelKey || event.key === null) updateModel()
 })
-search.addEventListener('input', renderModels)
-document.querySelectorAll('[data-free]').forEach(button => {
-  button.addEventListener('click', () => {
-    freeOnly = button.dataset.free === 'true'
-    document.querySelectorAll('[data-free]').forEach(filter => {
-      filter.setAttribute('aria-pressed', String(filter === button))
-    })
-    renderModels()
-  })
+document.addEventListener(settingsChangeEvent, event => {
+  if (event.detail === chatModelKey) updateModel()
 })
+updateModel()
 reloadModels.addEventListener('click', loadModels)
 loadModels()

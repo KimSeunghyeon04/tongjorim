@@ -1,12 +1,11 @@
 import { embedPast } from './embedding-index.mjs'
 import { memoryForPrompt } from './manuscript-memory.mjs'
 import { defaultReferenceSettings, validLoreCard } from './project-files.mjs'
-import { actualUsage, combineUsage, estimateLabel, jsonRequest, usageLabel } from './request-tools.mjs'
-import { activeLore, defaultEmbeddingModel, loreKinds, loreLimits, retrievalInput, searchPast } from './retrieval.mjs'
+import { actualUsage, combineUsage, estimateLabel, usageLabel } from './request-tools.mjs'
+import { activeLore, loreKinds, loreLimits, retrievalInput, searchFor, searchPast } from './retrieval.mjs'
 import { orderedWritingContext, projectNotesForRequest, referenceLabels, writingFieldPrefix, writingFields } from './writing-config.mjs'
 
 export const refsFor = project => project.references ?? defaultReferenceSettings()
-export const searchFor = project => project.search ?? { enabled: false, model: defaultEmbeddingModel }
 
 export function writingBody(project, references, lore, hits) {
   return {
@@ -34,9 +33,7 @@ function action(label, title, click) {
 
 export function setupResearch({ get, currentProject, saveWorkspace, onChange, goToPassage }) {
   const cache = new WeakMap()
-  const catalogSelect = get('embedding-model')
   const cardForm = get('lore-form')
-  let catalog
   let cardId
 
   function settingsChanged() {
@@ -82,25 +79,6 @@ export function setupResearch({ get, currentProject, saveWorkspace, onChange, go
       const target = buttons.find(button => button.dataset.key === focus.key && Number(button.dataset.delta) === focus.delta)
       if (!target.disabled) target.focus()
       else target.parentElement.querySelector('input').focus()
-    }
-  }
-
-  function renderCatalog() {
-    const { model } = searchFor(currentProject())
-    const models = catalog ?? []
-    catalogSelect.replaceChildren(...models.map(item => new Option(item.name, item.id)))
-    if (!models.some(item => item.id === model)) catalogSelect.append(new Option(model, model))
-    catalogSelect.value = model
-  }
-
-  async function showCatalog() {
-    try {
-      catalog = (await jsonRequest('/api/embeddings/models')).models
-      renderCatalog()
-      get('embedding-catalog-status').textContent = catalog.some(item => item.id === catalogSelect.value)
-        ? '' : '선택한 모델이 목록에 없어요. 다른 모델을 고를 수 있어요.'
-    } catch (error) {
-      get('embedding-catalog-status').textContent = error.message
     }
   }
 
@@ -163,10 +141,6 @@ export function setupResearch({ get, currentProject, saveWorkspace, onChange, go
     renderRefs()
     const { enabled } = searchFor(currentProject())
     get('semantic-enabled').checked = enabled
-    get('embedding-model-settings').hidden = !enabled
-    get('embedding-catalog-status').textContent = ''
-    renderCatalog()
-    if (enabled && !catalog) showCatalog()
     renderState()
   }
 
@@ -327,20 +301,10 @@ export function setupResearch({ get, currentProject, saveWorkspace, onChange, go
     const project = currentProject()
     project.search = { ...searchFor(project), enabled: event.target.checked }
     forget(project)
-    get('embedding-model-settings').hidden = !project.search.enabled
-    if (project.search.enabled) showCatalog()
-    settingsChanged()
-  })
-  catalogSelect.addEventListener('change', () => {
-    const project = currentProject()
-    project.search = { ...searchFor(project), model: catalogSelect.value }
-    forget(project)
-    get('embedding-catalog-status').textContent = ''
     settingsChanged()
   })
   get('retry-search').addEventListener('click', () => {
     forget(currentProject())
-    if (searchFor(currentProject()).enabled) showCatalog()
     onChange()
     get('preview-request').click()
   })
