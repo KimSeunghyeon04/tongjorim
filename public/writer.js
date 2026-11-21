@@ -8,7 +8,8 @@ import {
 import { assistantMessageLimit, assistantNoteDraftLimit, createWritingAssistant, projectNotesLimitHint } from './writing-assistant.mjs'
 import { memoryForPrompt, memoryReadThrough, memoryRequest, setManuscriptText, updateManuscriptMemory } from './manuscript-memory.mjs'
 import { exportPack, exportProject, readPack, readProject } from './project-files.mjs'
-import { currentProjectOf, makeProject, mergeModelSettings, projectName, readWorkspace, storageKey } from './writing-workspace.mjs'
+import { currentProjectOf, makeProject, mergeModelSettings, projectName, readWorkspace } from './writing-workspace.mjs'
+import { cacheWorkspace, openWorkspaceStorage, readCachedWorkspace, storageKey, workspaceStatusEvent, workspaceStorageStatus } from './workspace-storage.mjs'
 import { setupResearch } from './research-panel.mjs'
 import { setupSourcePanel } from './source-panel.mjs'
 import { paragraphRanges } from './retrieval.mjs'
@@ -93,7 +94,7 @@ const storageConflictMessage = '다른 탭에서 작품이 바뀌어 이 탭의 
 
 function loadWorkspace() {
   try {
-    savedVersion = localStorage.getItem(storageKey)
+    savedVersion = readCachedWorkspace()
     return readWorkspace(savedVersion)
   } catch {
     storageReadable = false
@@ -103,6 +104,7 @@ function loadWorkspace() {
   }
 }
 
+await openWorkspaceStorage()
 const workspace = loadWorkspace()
 const currentProject = () => currentProjectOf(workspace)
 const planAssistant = createWritingAssistant({
@@ -124,10 +126,13 @@ const planAssistant = createWritingAssistant({
 })
 
 function showStorageStatus() {
-  get('storage-error').hidden = !storageWarning
+  const status = workspaceStorageStatus()
+  const warning = storageWarning || status.warning
+  get('storage-error').hidden = !warning
   const message = get('storage-error-message')
-  if (message.textContent !== storageWarning) message.textContent = storageWarning
-  const label = storageWarning ? '브라우저 저장 안 됨' : '브라우저에 저장됨'
+  if (message.textContent !== warning) message.textContent = warning
+  const label = warning ? '저장 상태 확인' : status.saving ? '서버에 저장 중…'
+    : status.persisted ? '서버에 저장됨' : '저장 전'
   if (get('save-status').textContent !== label) get('save-status').textContent = label
 }
 
@@ -150,11 +155,11 @@ function syncSavedWorkspace(latest) {
 function saveWorkspace() {
   if (storageReadable) {
     try {
-      if (!syncSavedWorkspace(localStorage.getItem(storageKey))) {
+      if (!syncSavedWorkspace(readCachedWorkspace())) {
         storageWarning = storageConflictMessage
       } else {
         const nextVersion = JSON.stringify(workspace)
-        localStorage.setItem(storageKey, nextVersion)
+        void cacheWorkspace(nextVersion)
         savedVersion = nextVersion
         storageWarning = ''
       }
@@ -532,7 +537,7 @@ async function continueManuscript() {
 
     let output = ''
     const result = await requestCompletion('/api/write', withModelOptions(project, body), {
-      signal,
+      signal, projectId: project.id,
       onText(content) {
         if (!output) writingStatus.textContent = '이어서 쓰는 중이에요.'
         output += content
@@ -587,7 +592,7 @@ async function generateRevision(revision) {
   try {
     const body = revisionBody(project, revision)
     const result = await requestCompletion('/api/revise', withModelOptions(project, body), {
-      signal: controller.signal,
+      signal: controller.signal, projectId: project.id,
       onText(content) {
         if (controller.signal.aborted) return
         if (!preview.text.trim()) {
@@ -1432,7 +1437,7 @@ get('apply-pack-import').addEventListener('click', () => {
   }
 })
 function syncWorkspaceFromStorage() {
-  if (!syncSavedWorkspace(localStorage.getItem(storageKey))) {
+  if (!syncSavedWorkspace(readCachedWorkspace())) {
     storageWarning = storageConflictMessage
   }
   showStorageStatus()
@@ -1444,7 +1449,8 @@ window.addEventListener('storage', event => {
 document.addEventListener(settingsChangeEvent, event => {
   if (event.detail === storageKey) syncWorkspaceFromStorage()
 })
+document.addEventListener(workspaceStatusEvent, showStorageStatus)
 get('refresh-catalog').addEventListener('click', loadCatalog)
 renderWorkspace()
-saveWorkspace()
+showStorageStatus()
 loadCatalog()

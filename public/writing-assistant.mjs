@@ -152,7 +152,7 @@ export function createWritingAssistant({ transcript, scrollport = transcript, st
       let text = ''
       const body = withModelOptions(project, { ...request, messages: [...history, user] })
       const result = await requestCompletion('/api/assistant', body, {
-        signal: controller.signal,
+        signal: controller.signal, projectId: project.id,
         onText(content) { text += content },
       })
       if (active !== turn) return false

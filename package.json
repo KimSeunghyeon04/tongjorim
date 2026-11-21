@@ -2,7 +2,7 @@
   "name": "tongjorim",
   "version": "1.0.0",
   "private": true,
-  "engines": { "node": ">=22" },
+  "engines": { "node": ">=22.13.0" },
   "scripts": {
     "start": "node server.mjs",
     "test": "node --test",

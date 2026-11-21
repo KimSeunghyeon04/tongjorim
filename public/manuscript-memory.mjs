@@ -52,7 +52,7 @@ export async function updateManuscriptMemory(project, snapshot, signal, onCheckp
       const result = await requestCompletion('/api/memory', {
         model, projectTitle, memory, excerpt, systemPrompt, modelOptions,
       }, {
-        signal,
+        signal, projectId: project.id,
         onText(content) { revised += content },
       })
       onUsage(result.usage)

@@ -3,7 +3,8 @@ import { classifyModel, unclassifiedGeneration } from './model-classification.mj
 import { modelOptionsFor, reasoningEfforts, samplingRanges, validModelOptions } from './model-options.mjs'
 import { formatCost, jsonRequest } from './request-tools.mjs'
 import { searchFor } from './retrieval.mjs'
-import { currentProjectOf, projectName, readWorkspace, storageKey } from './writing-workspace.mjs'
+import { currentProjectOf, projectName, readWorkspace } from './writing-workspace.mjs'
+import { cacheWorkspace, openWorkspaceStorage, readCachedWorkspace, storageKey, workspaceStorageStatus } from './workspace-storage.mjs'
 import { optionalProjectModels, validModelId, validWritingTokenLimit } from './writing-config.mjs'
 
 const get = id => document.getElementById(id)
@@ -250,7 +251,7 @@ function setupSettings(root) {
 
   function loadWorkspace(preferred) {
     try {
-      const latest = localStorage.getItem(storageKey)
+      const latest = readCachedWorkspace()
       if (!workspace || serializedWorkspace !== latest) workspace = readWorkspace(latest)
       serializedWorkspace = latest
     } catch {
@@ -261,17 +262,21 @@ function setupSettings(root) {
   }
 
   function saveProjectSetting(projectId, update) {
-    const latest = localStorage.getItem(storageKey)
+    const latest = readCachedWorkspace()
     const next = latest === null && serializedWorkspace === null ? structuredClone(workspace) : readWorkspace(latest)
     const project = next.projects.find(item => item.id === projectId)
     if (!project) throw new Error('선택한 작품을 찾을 수 없어요.')
     update(project)
     const serialized = JSON.stringify(next)
-    localStorage.setItem(storageKey, serialized)
+    const saved = cacheWorkspace(serialized)
     serializedWorkspace = serialized
     workspace = next
     renderProjects(projectId)
-    showStatus(`‘${projectName(project)}’ 설정을 저장했어요.`)
+    showStatus(`‘${projectName(project)}’ 설정을 서버에 저장하고 있어요.`)
+    saved.then(success => {
+      if (serializedWorkspace !== serialized) return
+      showStatus(success ? `‘${projectName(project)}’ 설정을 서버에 저장했어요.` : workspaceStorageStatus().warning, !success)
+    })
     notifyChange(storageKey)
   }
 
@@ -475,7 +480,7 @@ function setupSettings(root) {
   return () => {
     closeOptions(false)
     loadWorkspace('')
-    showStatus('설정은 이 브라우저에 저장돼요.')
+    showStatus('설정은 통조림 서버에 저장돼요.')
     refreshCatalogs()
     refreshUsage()
   }
@@ -536,6 +541,7 @@ function setupPopup(trigger) {
       content.append(...main.children)
       scrollport.replaceChildren(content)
       document.body.append(picker)
+      await openWorkspaceStorage()
       refresh = setupSettings(content)
       scrollToSection()
     } catch {
@@ -565,5 +571,8 @@ function setupPopup(trigger) {
 
 const settingsPage = document.querySelector('.settings-main')
 const settingsTrigger = document.querySelector('[data-open-settings]')
-if (settingsPage) setupSettings(settingsPage)
+if (settingsPage) {
+  await openWorkspaceStorage()
+  setupSettings(settingsPage)
+}
 if (settingsTrigger) setupPopup(settingsTrigger)

@@ -74,4 +74,5 @@ globalThis.fetch = async (url, options) => {
 process.env.OPENROUTER_API_KEY = qaApiKey
 if (process.env.OPENROUTER_MANAGE !== qaManagementKey) process.env.OPENROUTER_MANAGE = ''
 process.env.PORT ??= qaPort
+process.env.TONGJORIM_DB_PATH ??= ':memory:'
 await import('../server.mjs')

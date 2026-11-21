@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { once } from 'node:events'
 import { createServer } from 'node:http'
 import { readFile } from 'node:fs/promises'
@@ -14,6 +15,8 @@ import { actualUsage } from './public/request-tools.mjs'
 import { openRouterOptions, reasoningEfforts, validModelOptions } from './public/model-options.mjs'
 import { loreCardFields, validLoreCardFields } from './public/project-files.mjs'
 import { chunkLimit, embeddingBatchSize, embeddingQueryLimit, loreKinds, loreLimits } from './public/retrieval.mjs'
+import { readWorkspace } from './public/writing-workspace.mjs'
+import { openTongjorimStore } from './tongjorim-store.mjs'
 
 try {
   loadEnvFile(fileURLToPath(new URL('.env', import.meta.url)))
@@ -23,10 +26,13 @@ try {
 
 const apiKey = process.env.OPENROUTER_API_KEY?.trim() || process.env.OPENROUTER_API?.trim()
 const managementKey = process.env.OPENROUTER_MANAGE?.trim()
+const logCredentials = [apiKey, managementKey].filter(Boolean)
+const store = openTongjorimStore(process.env.TONGJORIM_DB_PATH || fileURLToPath(new URL('./data/tongjorim.sqlite', import.meta.url)))
 const port = Number(process.env.PORT || 4173)
 const baseUrl = 'https://openrouter.ai/api/v1'
 const writingRequestBytes = 1024 * 1024
 const assistantRequestBytes = 512 * 1024
+const workspaceRequestBytes = 32 * 1024 * 1024
 const hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`])
 const assets = new Map([
   ['/', ['writer.html', 'text/html; charset=utf-8']],
@@ -39,6 +45,7 @@ const assets = new Map([
   ['/writing-config.mjs', ['writing-config.mjs', 'text/javascript; charset=utf-8']],
   ['/writing-assistant.mjs', ['writing-assistant.mjs', 'text/javascript; charset=utf-8']],
   ['/writing-workspace.mjs', ['writing-workspace.mjs', 'text/javascript; charset=utf-8']],
+  ['/workspace-storage.mjs', ['workspace-storage.mjs', 'text/javascript; charset=utf-8']],
   ['/manuscript-memory.mjs', ['manuscript-memory.mjs', 'text/javascript; charset=utf-8']],
   ['/retrieval.mjs', ['retrieval.mjs', 'text/javascript; charset=utf-8']],
   ['/embedding-index.mjs', ['embedding-index.mjs', 'text/javascript; charset=utf-8']],
@@ -378,13 +385,30 @@ async function embed(req, res) {
 }
 
 async function readStreamingPayload(req, completionFor, maxBytes) {
-  const { modelOptions, ...input } = (await readJsonRequest(req, maxBytes)) ?? {}
-  return inferencePayload({ ...completionFor(input), stream: true }, modelOptions)
+  const { modelOptions, projectId, ...input } = (await readJsonRequest(req, maxBytes)) ?? {}
+  const payload = inferencePayload({ ...completionFor(input), stream: true }, modelOptions)
+  return { payload, projectId: typeof projectId === 'string' && projectId.length <= 100 ? projectId : null }
+}
+
+function recordModelExchange(exchange) {
+  try {
+    const record = JSON.parse(JSON.stringify(exchange, (_key, value) => typeof value === 'string'
+      ? logCredentials.reduce((result, credential) => result.replaceAll(credential, '[REDACTED]'), value)
+      : value))
+    store.recordModelRequest(randomUUID(), record)
+  } catch (error) {
+    console.warn('모델 요청을 데이터베이스에 저장하지 못했어요.', error.code ?? 'UNKNOWN')
+  }
 }
 
 async function streamCompletion(req, res, completionFor, maxBytes) {
   if (!apiKey) throw new RequestError(503, '.env에 OPENROUTER_API 키를 설정하고 서버를 다시 시작해 주세요.')
-  const payload = await readStreamingPayload(req, completionFor, maxBytes)
+  const { payload, projectId } = await readStreamingPayload(req, completionFor, maxBytes)
+  const exchange = {
+    timestamp: new Date().toISOString(), route: new URL(req.url, 'http://localhost').pathname, projectId, request: payload,
+    response: { status: null, finishReason: null, text: '', raw: '' }, error: null,
+  }
+  let upstreamErrorBody
   const disconnect = new AbortController()
   const timeout = AbortSignal.timeout(120_000)
   const signal = AbortSignal.any([disconnect.signal, timeout])
@@ -403,8 +427,9 @@ async function streamCompletion(req, res, completionFor, maxBytes) {
       body: JSON.stringify(payload),
       signal,
     })
+    exchange.response.status = upstream.status
     if (!upstream.ok || !upstream.headers.get('content-type')?.includes('text/event-stream')) {
-      await upstream.body?.cancel()
+      upstreamErrorBody = upstream.text().catch(() => '')
       const status = upstreamErrors[upstream.status] ? upstream.status : 502
       throw new RequestError(status, upstreamErrors[status] ?? 'OpenRouter가 응답하지 않아요. 잠시 후 다시 시도해 주세요.')
     }
@@ -413,11 +438,11 @@ async function streamCompletion(req, res, completionFor, maxBytes) {
     res.flushHeaders()
     let buffer = ''
     let actualModel
-    let finishReason
     const usage = actualUsage()
     let receivedText = false
 
     for await (const chunk of upstream.body.pipeThrough(new TextDecoderStream())) {
+      exchange.response.raw += chunk
       const lines = (buffer + chunk).split('\n')
       buffer = lines.pop()
       for (const line of lines) {
@@ -425,17 +450,17 @@ async function streamCompletion(req, res, completionFor, maxBytes) {
         const data = line.slice(5).trim()
         if (data === '[DONE]') {
           if (!receivedText) throw new RequestError(502, '모델이 답변을 보내지 않았어요. 다른 모델로 다시 시도해 주세요.')
-          await send({ type: 'done', model: actualModel, tokens: usage.totalTokens, usage, truncated: finishReason === 'length' })
+          await send({ type: 'done', model: actualModel, tokens: usage.totalTokens, usage, truncated: exchange.response.finishReason === 'length' })
           res.end()
           return
         }
         const event = JSON.parse(data)
         const choice = event.choices?.[0]
+        if (choice?.finish_reason) exchange.response.finishReason = choice.finish_reason
         if (event.error || choice?.finish_reason === 'error') {
           throw new RequestError(502, upstreamErrors[event.error?.code] ?? '모델이 답변을 중단했어요. 다시 시도해 주세요.')
         }
         if (modelIdPattern.test(event.model)) actualModel = event.model
-        if (choice?.finish_reason) finishReason = choice.finish_reason
         if (event.usage) {
           for (const [key, value] of Object.entries(actualUsage(event.usage))) {
             if (value !== null) usage[key] = value
@@ -443,20 +468,27 @@ async function streamCompletion(req, res, completionFor, maxBytes) {
         }
         if (typeof choice?.delta?.content === 'string' && choice.delta.content) {
           receivedText ||= Boolean(choice.delta.content.trim())
+          exchange.response.text += choice.delta.content
           await send({ type: 'text', content: choice.delta.content })
         }
       }
     }
     throw new RequestError(502, '답변을 받는 도중 연결이 끊겼어요. 다시 시도해 주세요.')
   } catch (error) {
-    if (disconnect.signal.aborted || res.destroyed) return
+    if (disconnect.signal.aborted || res.destroyed) {
+      exchange.error = '클라이언트 연결이 종료됐어요.'
+      return
+    }
     const message = error instanceof RequestError ? error.message : timeout.aborted
       ? '답변 시간이 초과됐어요. 다시 시도해 주세요.'
       : 'OpenRouter에 연결할 수 없어요. 인터넷 연결을 확인하고 다시 시도해 주세요.'
+    exchange.error = message
     if (res.headersSent) res.end(`${JSON.stringify({ type: 'error', message })}\n`)
     else json(res, error instanceof RequestError ? error.status : 502, { error: message })
   } finally {
     res.off('close', abort)
+    if (upstreamErrorBody) exchange.response.raw = await upstreamErrorBody
+    recordModelExchange(exchange)
   }
 }
 
@@ -481,10 +513,21 @@ const server = createServer(async (req, res) => {
       json(res, 200, { keyConfigured: Boolean(apiKey), ...await modelCatalog() })
     } else if (req.method === 'GET' && path === '/api/openrouter/usage') {
       json(res, 200, await openRouterUsage())
+    } else if (req.method === 'GET' && path === '/api/workspace') {
+      json(res, 200, store.readWorkspace())
+    } else if (req.method === 'POST' && path === '/api/workspace') {
+      const { revision, snapshot } = (await readJsonRequest(req, workspaceRequestBytes)) ?? {}
+      if (typeof snapshot !== 'string' || (revision !== null && (!Number.isSafeInteger(revision) || revision < 1))) {
+        throw new RequestError(400, '작품 저장 형식이 올바르지 않아요.')
+      }
+      try { readWorkspace(snapshot) } catch { throw new RequestError(400, '작업공간을 읽을 수 없어요.') }
+      const result = store.saveWorkspace(revision, snapshot)
+      json(res, result.conflict ? 409 : 200, result)
     } else if (req.method === 'POST' && path === '/api/write') {
       await streamCompletion(req, res, writingCompletion, writingRequestBytes)
     } else if (req.method === 'POST' && path === '/api/write/preview') {
-      json(res, 200, await readStreamingPayload(req, writingCompletion, writingRequestBytes))
+      const { payload } = await readStreamingPayload(req, writingCompletion, writingRequestBytes)
+      json(res, 200, payload)
     } else if (req.method === 'POST' && path === '/api/revise') {
       await streamCompletion(req, res, revisionCompletion)
     } else if (req.method === 'POST' && path === '/api/assistant') {
