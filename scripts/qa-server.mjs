@@ -1,7 +1,7 @@
 import { appendFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { passages, queries } from './retrieval-fixture.mjs'
+import { passages, qaPort, queries } from './retrieval-fixture.mjs'
 import { defaultEmbeddingModel } from '../public/retrieval.mjs'
 
 const log = join(tmpdir(), 'relay-openrouter-qa.ndjson')
@@ -27,10 +27,11 @@ globalThis.fetch = async (url, options) => {
   if (path === '/embeddings') {
     if (body.model === 'qa/failed-embedding') return Response.json({ error: { message: 'Mock embeddings unavailable' } }, { status: 502 })
     const data = body.input.map((text, index) => {
-      const match = queries.find(row => row.kind === 'semantic' && text.startsWith(row.text))
+      const match = queries.find(row => text.startsWith(row.text))
       const key = match?.answer ?? answerKeys.find(candidate => passages[candidate] === text)
-      const embedding = [0, 0, 0, 0]
-      embedding[Math.max(0, answerKeys.indexOf(key) + 1)] = 1
+      const embedding = [0, 0, 0, 0, 0]
+      const axis = match?.kind === 'unrelated' ? embedding.length - 1 : Math.max(0, answerKeys.indexOf(key) + 1)
+      embedding[axis] = 1
       return { index, embedding }
     }).reverse()
     return Response.json({ data, usage: { prompt_tokens: 31, total_tokens: 31, cost: 0.000031 } })
@@ -48,5 +49,5 @@ globalThis.fetch = async (url, options) => {
 }
 
 process.env.OPENROUTER_API_KEY = 'relay-qa-key'
-process.env.PORT ??= '4184'
+process.env.PORT ??= qaPort
 await import('../server.mjs')

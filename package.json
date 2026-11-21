@@ -3,5 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "engines": { "node": ">=22" },
-  "scripts": { "start": "node server.mjs" }
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test",
+    "qa:server": "node scripts/qa-server.mjs",
+    "qa:retrieval": "node scripts/retrieval-live.mjs"
+  }
 }

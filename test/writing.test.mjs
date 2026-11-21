@@ -4,7 +4,7 @@ import { exportPack, exportProject, readPack, readProject } from '../public/proj
 import { activeLore, chunkManuscript, retrievalInput, searchPast } from '../public/retrieval.mjs'
 import { actualUsage, combineUsage, estimateUsage } from '../public/request-tools.mjs'
 import { projectNotesForRequest, writingFieldPrefix } from '../public/writing-config.mjs'
-import { manuscript, passages, queries } from './retrieval-fixture.mjs'
+import { manuscript, passages, queries } from '../scripts/retrieval-fixture.mjs'
 
 test('한국어 로어북 조사와 이름 경계, 별칭, 우선순위와 입력 한도', () => {
   const card = { id: '1', kind: 'character', name: '나래', aliases: ['종잡이'], description: '문지기', priority: 31, always: false }
@@ -84,6 +84,18 @@ test('과거 문단이 하나여도 세 글자 이름을 조사와 단어 경계
   assert.deepEqual(searchName(exact), [exact])
   assert.deepEqual(searchName('서하린상자에 표를 보관했다.'), [])
   assert.deepEqual(searchName('박서하린은 낡은 표를 보관했다.'), [])
+})
+
+test('정확히 일치하는 이름은 키워드와 의미 점수가 높은 유사 문단보다 앞에 온다', () => {
+  const exact = '서하린은 벽난로 안쪽에서 잃어버렸던 은색 상자를 꺼내 먼지를 닦았다.'
+  const similar = ['서하와 하린은 남았다.', '서하와 하린은 걸었다.', '서하와 하린은 웃었다.']
+  const filler = ['바닷가에 비가 쏟아졌다.', '항구의 종이 마침내 울렸다.', '나는 광장으로 달렸다.', '날이 다시 밝았다.', '강아지가 창가에서 잠들었다.']
+  const manuscript = [...similar, ...filler, exact, '끝'.repeat(18_000)].join('\n\n')
+  const { chunks, query, intent } = retrievalInput(manuscript, '서하린', true)
+  const semantic = { query: [1, 0], vectors: chunks.map(chunk => similar.includes(chunk.text) ? [1, 0] : [0, 1]) }
+  const expected = [exact, similar[0], similar[1]]
+  assert.deepEqual(searchPast(chunks, query, undefined, intent).map(hit => hit.text), expected)
+  assert.deepEqual(searchPast(chunks, query, semantic, intent).map(hit => hit.text), expected)
 })
 
 test('백업 형식, 복원 ID, AI 메모 위치와 선택 설정', () => {

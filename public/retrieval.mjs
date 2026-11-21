@@ -149,10 +149,9 @@ function keywordRanking(chunks, query, intent) {
         score += weight
       }
     }
-    const matches = (intentHits >= 2 && intentScore >= 1.2) ||
-      (singleWord && intentHits === intentTerms.size && includesAlias(normalize(chunk.text), keyword))
-    return matches
-      ? [{ index, score: intentScore + Math.min(score / 4, intentScore / 4), chunk }]
+    const exactMatch = singleWord && intentHits === intentTerms.size && includesAlias(normalize(chunk.text), keyword)
+    return exactMatch || (intentHits >= 2 && intentScore >= 1.2)
+      ? [{ index, score: intentScore + Math.min(score / 4, intentScore / 4), chunk, exactMatch }]
       : []
   }).sort((a, b) => b.score - a.score || a.index - b.index)
 }
@@ -179,7 +178,7 @@ export function searchPast(chunks, query, semantic, intent = '') {
 
   for (const [kind, list] of [['keyword', keyword], ['semantic', meaning]]) {
     list.forEach((item, rank) => {
-      const record = scores.get(item.index) ?? { ...item.chunk, score: 0 }
+      const record = scores.get(item.index) ?? { ...item.chunk, score: 0, exactMatch: Boolean(item.exactMatch) }
       record[kind] = item.score
       record.score += 1 / (60 + rank + 1)
       scores.set(item.index, record)
@@ -188,7 +187,9 @@ export function searchPast(chunks, query, semantic, intent = '') {
 
   const result = []
   let used = 0
-  for (const hit of Array.from(scores.values()).sort((a, b) => b.score - a.score || a.start - b.start)) {
+  const ranked = Array.from(scores.values()).sort((a, b) =>
+    Number(b.exactMatch) - Number(a.exactMatch) || b.score - a.score || a.start - b.start)
+  for (const hit of ranked) {
     if (result.length === 3) break
     if (result.some(item => item.start < hit.end && item.end > hit.start)) continue
     const block = `[원고 ${hit.start + 1}–${hit.end}자]\n${hit.text}`

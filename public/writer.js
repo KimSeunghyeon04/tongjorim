@@ -449,8 +449,9 @@ async function showRequestPreview() {
 async function generateDraft(revision) {
   if (activeRequest || activePlanRequest) return
   const project = currentProject()
+  const oneTimeNote = !revision && project.authorMode === 'once' ? project.direction : undefined
   const preview = {
-    original: project.manuscript, revision, text: '', model: '', note: project.direction, authorMode: project.authorMode,
+    original: project.manuscript, revision, text: '', model: '',
     status: revision ? '수정안을 준비하는 중이에요.' : '전송할 원고와 자료를 준비하는 중이에요.',
   }
   previews.set(project.id, preview)
@@ -465,6 +466,7 @@ async function generateDraft(revision) {
 
   try {
     const body = revision ? revisionBody(project, revision) : (await research.prepare(project, controller.signal)).body
+    if (oneTimeNote !== undefined && body.draft.direction === oneTimeNote) preview.oneTimeNote = oneTimeNote
     const result = await requestCompletion(revision ? '/api/revise' : '/api/write', body, {
       signal: controller.signal,
       onText(content) {
@@ -950,7 +952,7 @@ accept.addEventListener('click', () => {
     ? project.manuscript.slice(0, revision.start) + text + project.manuscript.slice(revision.end)
     : appendParagraphs(project.manuscript, text)
   setManuscriptText(project, updated)
-  if (!revision && preview.authorMode === 'once' && project.authorMode === 'once' && project.direction === preview.note) {
+  if (project.authorMode === 'once' && project.direction === preview.oneTimeNote) {
     project.direction = ''
     get('direction').value = ''
   }

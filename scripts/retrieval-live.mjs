@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import { cosine, defaultEmbeddingModel, embeddingBatchSize, retrievalInput, searchPast } from '../public/retrieval.mjs'
-import { manuscript, passages, queries } from './retrieval-fixture.mjs'
+import { manuscript, passages, qaPort, queries } from './retrieval-fixture.mjs'
 
-const origin = 'http://127.0.0.1:' + (process.argv[2] ?? '4173')
+const origin = 'http://127.0.0.1:' + (process.argv[2] ?? process.env.PORT ?? qaPort)
 async function api(path, body) {
   const res = await fetch(origin + path, body ? {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
