@@ -395,13 +395,17 @@
           <option value="revision">선택 문단 퇴고</option>
         </select>
       </div>
+      <div class="writing-input" id="note-prompt-target-field" hidden>
+        <label for="note-prompt-target">적용할 메모</label>
+        <select class="writing-field" id="note-prompt-target"></select>
+      </div>
       <div class="writing-input">
         <div class="field-heading">
           <label for="system-prompt" id="system-prompt-label">시스템 프롬프트</label>
           <button type="button" class="quiet-button" id="reset-system-prompt" disabled>기본값 복원</button>
         </div>
         <textarea class="writing-field system-prompt-field" id="system-prompt" rows="15" aria-describedby="system-prompt-hint"></textarea>
-        <p class="field-hint" id="system-prompt-hint">이 작품에서 선택한 기능에 적용돼요. 비워 두면 해당 기능의 기본 프롬프트를 사용해요.</p>
+        <p class="field-hint" id="system-prompt-hint">프롬프트는 이 작품에서만 적용돼요. 비워 두면 기본 프롬프트를 사용해요.</p>
         <p class="visually-hidden" id="system-prompt-status" role="status"></p>
       </div>
     </div>

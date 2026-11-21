@@ -38,6 +38,7 @@ const revisionLine = get('revision-line')
 const projectTitle = get('project-title')
 const projectTitleDialog = get('project-title-dialog')
 const promptTarget = get('prompt-target')
+const notePromptTarget = get('note-prompt-target')
 const systemPrompt = get('system-prompt')
 const resetSystemPrompt = get('reset-system-prompt')
 const promptDialog = get('prompt-dialog')
@@ -861,7 +862,7 @@ function bindField(id, update) {
   })
 }
 
-const currentPromptTarget = () => notePlanner.hidden ? promptTarget.value : currentPlan().target
+const currentPromptTarget = () => notePlanner.hidden ? promptTarget.value : notePromptTarget.value
 
 function currentPromptDefault() {
   const target = currentPromptTarget()
@@ -875,6 +876,7 @@ function renderPromptEditor() {
   const target = currentPromptTarget()
   const value = target === 'continuation' ? project.systemPrompt : project.notePrompts?.[target]
   get('manuscript-prompt-target').hidden = !notePlanner.hidden
+  get('note-prompt-target-field').hidden = notePlanner.hidden
   get('system-prompt-label').textContent = notePlanner.hidden ? '시스템 프롬프트' : `${noteKinds[target].label} 도우미 프롬프트`
   systemPrompt.value = value ?? currentPromptDefault()
   systemPrompt.scrollTop = 0
@@ -1039,8 +1041,12 @@ memoryRefresh.addEventListener('click', () => {
 })
 memoryStop.addEventListener('click', () => memoryJobs.get(currentProject())?.controller?.abort())
 for (const [id, key] of Object.entries(noteFields)) bindNoteImport(id, key)
-planTarget.replaceChildren(...Object.entries(noteKinds).map(([key, kind]) => new Option(kind.label, key)))
-promptTarget.addEventListener('change', renderPromptEditor)
+for (const select of [planTarget, notePromptTarget]) {
+  select.replaceChildren(...Object.entries(noteKinds).map(([key, kind]) => new Option(kind.label, key)))
+}
+for (const select of [promptTarget, notePromptTarget]) {
+  select.addEventListener('change', renderPromptEditor)
+}
 for (const tab of workspaceTabs) {
   tab.addEventListener('click', () => setNoteWorkspace(tab === noteWorkspaceTab))
   tab.addEventListener('keydown', event => {
@@ -1056,6 +1062,7 @@ for (const tab of workspaceTabs) {
 }
 for (const id of ['edit-manuscript-prompt', 'edit-plan-prompt']) {
   get(id).addEventListener('click', () => {
+    if (!notePlanner.hidden) notePromptTarget.value = currentPlan().target
     renderPromptEditor()
     promptDialog.showModal()
     systemPrompt.focus()
