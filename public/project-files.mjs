@@ -1,6 +1,6 @@
 import { loreKinds, loreLimits } from './retrieval.mjs'
 import { validModelOptionProfiles } from './model-options.mjs'
-import { defaultReferences, maxSourceLimits, normalizeLineEndings, noteKinds, optionalProjectModels, systemPromptLimit, validModelId, validSourceLimit, writingFields, writingTokenLimits } from './writing-config.mjs'
+import { defaultReferences, maxSourceLimits, normalizeLineEndings, noteKinds, optionalProjectModels, systemPromptLimit, validModelId, validSourceLimit, validWritingTokenLimit, writingFields } from './writing-config.mjs'
 
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value)
 const optional = (value, validate) => value === undefined || validate(value)
@@ -59,7 +59,7 @@ export function hasSceneNote(note) {
 
 export function validProjectBase(project) {
   return record(project) && limited(project.id, 100) && Boolean(project.id) && validModelId(project.model) &&
-    writingTokenLimits.includes(project.maxTokens) && ['title', 'synopsis', 'worldNotes'].every(key =>
+    validWritingTokenLimit(project.maxTokens) && ['title', 'synopsis', 'worldNotes'].every(key =>
       typeof project[key] === 'string') && optional(project.characterNotes, value => typeof value === 'string') &&
     validPrompts(project)
 }

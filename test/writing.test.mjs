@@ -67,6 +67,16 @@ test('원문 설정은 작품 백업에서 복원되고 기존 프로젝트에�
   assert.throws(() => restore({ ...sourceLimits, manuscript: 80_001 }), /형식/)
 })
 
+test('작품 백업은 양의 정수인 출력 토큰 한도를 복원한다', () => {
+  const project = { id: 'original', title: '저편', synopsis: '', worldNotes: '', model: 'qa/write',
+    direction: '', manuscript: '' }
+  const restore = maxTokens => readProject(JSON.stringify(exportProject({ ...project, maxTokens })))
+  for (const maxTokens of [1, 2048, 4096, 8193]) assert.equal(restore(maxTokens).maxTokens, maxTokens)
+  for (const maxTokens of [0, -1, 1.5, '8193', null, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => restore(maxTokens), /형식/)
+  }
+})
+
 test('한국어 로어북 조사와 이름 경계, 별칭, 우선순위와 입력 한도', () => {
   const card = { id: '1', kind: 'character', name: '나래', aliases: ['종잡이'], description: '문지기', priority: 31, always: false }
   assert.deepEqual(activeLore([card], '나래이션은 끝났다.', '').included, [])
@@ -211,7 +221,7 @@ test('다른 탭의 모델 설정을 적용할 때 원고와 프롬프트, 검�
   editing.notePrompts.lore = '편집 중인 카드 지시'
   editing.search = { enabled: true, model: 'qwen/qwen3-embedding-4b' }
 
-  const changed = { ...project, model: 'qa/other', maxTokens: 1024, planModel: 'qa/plan',
+  const changed = { ...project, model: 'qa/other', maxTokens: 8193, planModel: 'qa/plan',
     search: { enabled: false, model: 'qa/embedding' } }
   delete changed.revisionModel
   const next = { ...saved, projects: [changed, other] }
@@ -223,7 +233,7 @@ test('다른 탭의 모델 설정을 적용할 때 원고와 프롬프트, 검�
 
   const conflict = { ...next, projects: [{ ...changed, manuscript: '다른 탭에서 편집한 원고', maxTokens: 4096 }, other] }
   assert.equal(mergeModelSettings(live, JSON.stringify(next), JSON.stringify(conflict)), false)
-  assert.equal(editing.maxTokens, 1024)
+  assert.equal(editing.maxTokens, 8193)
   assert.equal(editing.manuscript, '편집 중인 원고')
 })
 

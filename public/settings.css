@@ -60,6 +60,8 @@ body:has(> .settings-popup[open]) { overflow: hidden; }
 .settings-section p { color: var(--muted); font-size: 13px; line-height: 1.55; }
 .settings-section-heading p, .settings-row p { margin-top: 4px; }
 .settings-section .settings-error { margin: 0 20px 10px; color: #8a382a; }
+.settings-row .generation-limit-error { color: #8a382a; }
+.generation-limit-error:empty { margin: 0; }
 .settings-row {
   min-height: 62px;
   border-top: 1px solid var(--line);

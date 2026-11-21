@@ -4,7 +4,7 @@ import { modelOptionsFor, reasoningEfforts, samplingRanges, validModelOptions } 
 import { formatCost, jsonRequest } from './request-tools.mjs'
 import { searchFor } from './retrieval.mjs'
 import { currentProjectOf, projectName, readWorkspace, storageKey } from './writing-workspace.mjs'
-import { optionalProjectModels, validModelId, writingTokenLimits } from './writing-config.mjs'
+import { optionalProjectModels, validModelId, validWritingTokenLimit } from './writing-config.mjs'
 
 const get = id => document.getElementById(id)
 const notifyChange = key => document.dispatchEvent(new CustomEvent(settingsChangeEvent, { detail: key }))
@@ -76,6 +76,7 @@ function setupSettings(root) {
   const refreshUsage = setupOpenRouterUsage()
   const projectSelect = get('settings-project')
   const limit = get('generation-limit')
+  const limitError = get('generation-limit-error')
   const dialog = get('model-dialog')
   const search = get('model-search')
   const publisherFilter = get('model-publisher')
@@ -136,6 +137,12 @@ function setupSettings(root) {
     const project = selectedProject()
     limit.disabled = !project
     limit.value = project?.maxTokens ?? ''
+    limitError.textContent = ''
+    renderModelSettings()
+  }
+
+  function renderModelSettings() {
+    const project = selectedProject()
     for (const button of modelButtons) {
       const key = button.dataset.model
       const id = selectedModel(key, project)
@@ -375,7 +382,7 @@ function setupSettings(root) {
       catalog.error = error instanceof TypeError ? '모델 목록에 연결할 수 없어요.' : error.message
     } finally {
       catalog.loading = false
-      renderSettings()
+      renderModelSettings()
       if (dialog.open && catalogFor(picker.key) === catalog) {
         renderClassificationFilters()
         renderPicker()
@@ -431,15 +438,29 @@ function setupSettings(root) {
     loadCatalog(catalogFor(picker.key))
   })
   projectSelect.addEventListener('change', renderSettings)
-  limit.replaceChildren(...writingTokenLimits.map(value => new Option(`${value.toLocaleString('ko-KR')} 토큰`, value)))
-  limit.addEventListener('change', () => {
-    const maxTokens = Number(limit.value)
+  function saveGenerationLimit() {
+    const project = selectedProject()
+    if (!project) return
+    const maxTokens = limit.valueAsNumber
+    if (!validWritingTokenLimit(maxTokens)) {
+      limit.value = project.maxTokens
+      limitError.textContent = '1 이상의 정수를 입력해 주세요.'
+      return
+    }
+    if (maxTokens === project.maxTokens) return
     try {
-      saveProjectSetting(projectSelect.value, project => { project.maxTokens = maxTokens })
+      saveProjectSetting(project.id, latest => { latest.maxTokens = maxTokens })
     } catch {
       renderSettings()
-      showStatus('생성 한도를 저장하지 못했어요. 작품이나 브라우저 저장 공간을 확인해 주세요.', true)
+      limitError.textContent = '저장하지 못했어요. 브라우저 저장 공간을 확인해 주세요.'
     }
+  }
+  limit.addEventListener('input', () => { limitError.textContent = '' })
+  limit.addEventListener('change', saveGenerationLimit)
+  limit.addEventListener('keydown', event => {
+    if (event.key !== 'Enter') return
+    event.preventDefault()
+    saveGenerationLimit()
   })
   window.addEventListener('storage', event => {
     if (event.key !== storageKey && event.key !== null) return

@@ -165,10 +165,13 @@
       </form>
       <div class="settings-row">
         <div>
-          <label for="generation-limit">생성 한도</label>
+          <label for="generation-limit">출력 토큰 한도</label>
           <p id="generation-limit-hint">이어쓰기, 퇴고, 작성 도우미의 최대 출력 토큰 수예요.</p>
         </div>
-        <select id="generation-limit" class="settings-select" aria-describedby="generation-limit-hint" disabled></select>
+        <div>
+          <input type="number" id="generation-limit" class="settings-select" min="1" step="1" required aria-describedby="generation-limit-hint generation-limit-error" disabled>
+          <p class="generation-limit-error" id="generation-limit-error" role="status"></p>
+        </div>
       </div>
     </section>
 

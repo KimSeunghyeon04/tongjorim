@@ -8,7 +8,7 @@ import {
   completionPayload, defaultLoreSystemPrompt, defaultMemoryPrompt, defaultNoteSystemPrompt, defaultRevisionPrompt, defaultSystemPrompt,
   defaultReferences, effectiveSystemPrompt, freeModel, memoryExcerptLimit, memoryOutputLimit, modelIdPattern, validModelId,
   noteDraftActions, noteKinds, orderedWritingContext, revisionParagraphLimit, systemPromptLimit,
-  writingFields, writingTokenLimits,
+  validWritingTokenLimit, writingFields,
 } from './public/writing-config.mjs'
 import { actualUsage } from './public/request-tools.mjs'
 import { openRouterOptions, reasoningEfforts, validModelOptions } from './public/model-options.mjs'
@@ -214,7 +214,7 @@ function writingCompletion({ model, maxTokens, draft, systemPrompt, references }
   }
   const included = orderedWritingContext(context, references)
   if (typeof model !== 'string' || model.length > 200 || !modelIdPattern.test(model) ||
-      !writingTokenLimits.includes(maxTokens) ||
+      !validWritingTokenLimit(maxTokens) ||
       !Object.entries(included).every(([field, text]) => typeof text === 'string' && text.length <= writingFields[field])) {
     throw new RequestError(400, '모델, 생성 한도와 원고 설정을 확인해 주세요.')
   }
@@ -230,7 +230,7 @@ function assistantCompletion({ kind, mode, model, maxTokens, target, messages, c
   const fields = ['projectTitle', ...Object.keys(noteKinds), 'manuscriptMemory']
   const notes = Object.fromEntries(fields.map(field => [field, context?.[field]]))
   notes.manuscriptMemory ??= ''
-  if (!validModelId(model) || !writingTokenLimits.includes(maxTokens) || !['note', 'lore'].includes(kind) ||
+  if (!validModelId(model) || !validWritingTokenLimit(maxTokens) || !['note', 'lore'].includes(kind) ||
       !['draft', 'chat'].includes(mode) || !Array.isArray(messages) || messages.length % 2 !== 1 ||
       messages.length > assistantHistoryTurns * 2 + 1 ||
       messages.some((message, index) => message?.role !== (index % 2 ? 'assistant' : 'user') ||
@@ -298,7 +298,7 @@ function memoryCompletion({ model, projectTitle, memory, excerpt, systemPrompt }
 
 function revisionCompletion({ model, maxTokens, paragraph, direction, systemPrompt }) {
   if (typeof model !== 'string' || model.length > 200 || !modelIdPattern.test(model) ||
-      !writingTokenLimits.includes(maxTokens) ||
+      !validWritingTokenLimit(maxTokens) ||
       typeof paragraph !== 'string' || !paragraph.trim() || paragraph.length > revisionParagraphLimit ||
       typeof direction !== 'string' || direction.length > writingFields.direction) {
     throw new RequestError(400, '퇴고할 문단과 지시를 확인해 주세요.')

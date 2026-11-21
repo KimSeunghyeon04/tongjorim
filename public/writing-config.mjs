@@ -23,7 +23,7 @@ export const revisionParagraphLimit = 18_000
 export const modelIdPattern = /^[a-z0-9][a-z0-9_.-]*\/[a-z0-9][a-z0-9_.:+-]*$/i
 export const validModelId = value => typeof value === 'string' && value.length <= 200 && modelIdPattern.test(value)
 export const freeModel = { id: 'openrouter/free', name: 'Free Models Router', free: true, input: 0, output: 0, request: 0 }
-export const writingTokenLimits = [1024, 2048, 4096]
+export const validWritingTokenLimit = value => Number.isSafeInteger(value) && value > 0
 export const optionalProjectModels = ['revisionModel', 'memoryModel', 'planModel']
 export const modelFor = (project, purpose) => project[`${purpose}Model`] ?? project.model
 export const assistantMessageLimit = 2400
