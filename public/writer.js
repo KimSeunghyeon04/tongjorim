@@ -1,7 +1,7 @@
 import { freeModel, requestCompletion, settingsChangeEvent } from './completion.js'
 import { withModelOptions } from './model-options.mjs'
 import {
-  appendParagraphs, completionPayload, defaultMemoryPrompt, defaultNoteSystemPrompt, defaultRevisionPrompt, defaultSystemPrompt,
+  appendParagraphs, completionPayload, defaultLoreSystemPrompt, defaultMemoryPrompt, defaultNoteSystemPrompt, defaultRevisionPrompt, defaultSystemPrompt,
   effectiveSystemPrompt, memoryOutputLimit, modelFor, normalizeLineEndings, noteDraftActions, noteKinds, projectNotesForRequest, referenceLabels,
   systemPromptLimit, writingFields,
 } from './writing-config.mjs'
@@ -42,6 +42,7 @@ const notePromptTarget = get('note-prompt-target')
 const systemPrompt = get('system-prompt')
 const resetSystemPrompt = get('reset-system-prompt')
 const promptDialog = get('prompt-dialog')
+let promptEditorMode = 'manuscript'
 const projectNoteDialog = get('project-note-dialog')
 const projectNoteContent = get('project-note-content')
 const projectNoteSections = [...projectNoteContent.querySelectorAll('[data-project-note]')]
@@ -217,7 +218,6 @@ function renderSidebarContext() {
   const host = get(onNote ? 'notes-panel' : 'project-note-body')
   if (projectNoteContent.parentElement !== host) host.append(projectNoteContent)
   if (onNote) selectProjectNote(currentPlan().target)
-  renderPromptEditor()
 }
 
 function updateCharacterCount() {
@@ -862,12 +862,16 @@ function bindField(id, update) {
   })
 }
 
-const currentPromptTarget = () => notePlanner.hidden ? promptTarget.value : notePromptTarget.value
+function currentPromptTarget() {
+  if (promptEditorMode === 'lore') return 'lore'
+  return promptEditorMode === 'note' ? notePromptTarget.value : promptTarget.value
+}
 
 function currentPromptDefault() {
   const target = currentPromptTarget()
   if (target === 'continuation') return defaultSystemPrompt
   if (target === 'memory') return defaultMemoryPrompt
+  if (target === 'lore') return defaultLoreSystemPrompt
   return target === 'revision' ? defaultRevisionPrompt : defaultNoteSystemPrompt(target)
 }
 
@@ -875,9 +879,10 @@ function renderPromptEditor() {
   const project = currentProject()
   const target = currentPromptTarget()
   const value = target === 'continuation' ? project.systemPrompt : project.notePrompts?.[target]
-  get('manuscript-prompt-target').hidden = !notePlanner.hidden
-  get('note-prompt-target-field').hidden = notePlanner.hidden
-  get('system-prompt-label').textContent = notePlanner.hidden ? '시스템 프롬프트' : `${noteKinds[target].label} 도우미 프롬프트`
+  const assistantLabel = target === 'lore' ? '로어북 AI 카드' : noteKinds[target]?.label
+  get('manuscript-prompt-target').hidden = promptEditorMode !== 'manuscript'
+  get('note-prompt-target-field').hidden = promptEditorMode !== 'note'
+  get('system-prompt-label').textContent = assistantLabel ? `${assistantLabel} 도우미 프롬프트` : '시스템 프롬프트'
   systemPrompt.value = value ?? currentPromptDefault()
   systemPrompt.scrollTop = 0
   updatePromptControls()
@@ -1060,9 +1065,14 @@ for (const tab of workspaceTabs) {
     nextTab.focus()
   })
 }
-for (const id of ['edit-manuscript-prompt', 'edit-plan-prompt']) {
+for (const [id, mode] of Object.entries({
+  'edit-manuscript-prompt': 'manuscript',
+  'edit-plan-prompt': 'note',
+  'edit-lore-prompt': 'lore',
+})) {
   get(id).addEventListener('click', () => {
-    if (!notePlanner.hidden) notePromptTarget.value = currentPlan().target
+    promptEditorMode = mode
+    if (mode === 'note') notePromptTarget.value = currentPlan().target
     renderPromptEditor()
     promptDialog.showModal()
     systemPrompt.focus()

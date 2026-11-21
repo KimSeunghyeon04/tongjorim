@@ -33,6 +33,7 @@ export const assistantHistoryTurns = 6
 export const memoryExcerptLimit = 12000
 export const memoryOutputLimit = 4096
 export const defaultRevisionPrompt = '선택한 문단을 다듬는 소설 편집자입니다. 서술 시점, 시제, 인물 관계와 원래 의미를 유지하고 작가의 퇴고 지시를 적용하세요. 원고에 그대로 교체할 수정된 문단만 출력하세요.'
+export const defaultLoreSystemPrompt = '소설의 로어북 카드를 작성하는 편집 도우미입니다. 작품 메모와 현재 카드의 설정을 유지하며 작가와 개선 방향을 의논하세요.'
 
 export const referenceLabels = {
   synopsis: '줄거리',

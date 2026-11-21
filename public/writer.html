@@ -317,7 +317,10 @@
               </div>
             </form>
             <section id="lore-assistant" class="writing-assistant lore-assistant" aria-labelledby="lore-assistant-title">
-              <h3 id="lore-assistant-title" tabindex="-1">AI 카드 도우미</h3>
+              <div class="field-heading">
+                <h3 id="lore-assistant-title" tabindex="-1">AI 카드 도우미</h3>
+                <button type="button" class="quiet-button" id="edit-lore-prompt" aria-haspopup="dialog" aria-controls="prompt-dialog">프롬프트 편집</button>
+              </div>
               <p class="field-hint">현재 카드와 작품 메모를 참고해요.</p>
               <p class="field-hint" id="lore-notes-limit" hidden></p>
               <ol class="assistant-transcript" id="lore-assistant-transcript" aria-label="로어북 카드 작성 대화" hidden></ol>

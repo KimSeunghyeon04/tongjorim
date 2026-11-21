@@ -152,7 +152,7 @@ test('백업 형식, 복원 ID, AI 메모 위치와 선택 설정', () => {
     id: 'original', title: '저편', manuscript: '나래가 도착했다.', direction: '문을 열어', authorMode: 'once',
     synopsis: '줄거리', worldNotes: '세계관', characterNotes: '인물', model: 'qa/write', maxTokens: 1024,
     memoryModel: 'qa/memory', revisionModel: 'qa/revision', planModel: 'qa/plan', search: { enabled: false, model: 'qa/embedding' },
-    systemPrompt: '이어쓰기 지시', notePrompts: { revision: '퇴고 지시', memory: '메모 지시' },
+    systemPrompt: '이어쓰기 지시', notePrompts: { revision: '퇴고 지시', memory: '메모 지시', lore: '카드 지시' },
     autoMemory: true, manuscriptMemory: { text: '도착함', through: 9, stale: false }, lorebook: [],
   }
   const backup = exportProject({ ...project, apiKey: 'secret' })
@@ -166,7 +166,9 @@ test('백업 형식, 복원 ID, AI 메모 위치와 선택 설정', () => {
   } })), /형식/)
   const pack = exportPack(project, { lorebook: true, prompts: true })
   assert.deepEqual(readPack(JSON.stringify(pack), { lorebook: true, prompts: false }), { lorebook: [] })
-  assert.equal(readPack(JSON.stringify(pack), { lorebook: false, prompts: true }).notePrompts.revision, '퇴고 지시')
+  assert.deepEqual(readPack(JSON.stringify(pack), { lorebook: false, prompts: true }).notePrompts, {
+    revision: '퇴고 지시', memory: '메모 지시', lore: '카드 지시',
+  })
 })
 
 test('백업 복원 시 원고 줄바꿈과 AI 메모가 읽은 위치를 함께 변환한다', () => {
@@ -180,16 +182,17 @@ test('백업 복원 시 원고 줄바꿈과 AI 메모가 읽은 위치를 함께
   assert.equal(restored.manuscript.slice(restored.manuscriptMemory.through), '\n\n라')
 })
 
-test('다른 탭의 모델 설정을 적용할 때 원고와 검색 상태를 보존한다', () => {
+test('다른 탭의 모델 설정을 적용할 때 원고와 프롬프트, 검색 상태를 보존한다', () => {
   const project = {
     id: 'original', title: '저편', synopsis: '', worldNotes: '', manuscript: '처음 원고', direction: '',
-    model: 'qa/write', maxTokens: 2048, revisionModel: 'qa/revision',
+    model: 'qa/write', maxTokens: 2048, revisionModel: 'qa/revision', notePrompts: { lore: '저장된 카드 지시' },
   }
-  const other = { ...project, id: 'other', title: '다른 작품' }
+  const other = { ...project, id: 'other', title: '다른 작품', notePrompts: { lore: '다른 작품 카드 지시' } }
   const saved = { version: 2, activeProjectId: project.id, projects: [project, other] }
   const live = structuredClone(saved)
   const editing = live.projects[0]
   editing.manuscript = '편집 중인 원고'
+  editing.notePrompts.lore = '편집 중인 카드 지시'
   editing.search = { enabled: true, model: 'qwen/qwen3-embedding-4b' }
 
   const changed = { ...project, model: 'qa/other', maxTokens: 1024, planModel: 'qa/plan',
@@ -198,7 +201,8 @@ test('다른 탭의 모델 설정을 적용할 때 원고와 검색 상태를 �
   const next = { ...saved, projects: [changed, other] }
   assert.deepEqual(mergeModelSettings(live, JSON.stringify(saved), JSON.stringify(next)), new Set(['original']))
   assert.equal(live.projects[0], editing)
-  assert.deepEqual(editing, { ...changed, manuscript: '편집 중인 원고', search: { enabled: true, model: 'qa/embedding' } })
+  assert.deepEqual(editing, { ...changed, manuscript: '편집 중인 원고', notePrompts: { lore: '편집 중인 카드 지시' },
+    search: { enabled: true, model: 'qa/embedding' } })
   assert.deepEqual(live.projects[1], other)
 
   const conflict = { ...next, projects: [{ ...changed, manuscript: '다른 탭에서 편집한 원고', maxTokens: 4096 }, other] }

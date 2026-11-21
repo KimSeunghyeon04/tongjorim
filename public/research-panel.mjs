@@ -142,7 +142,7 @@ export function setupResearch({ get, currentProject, saveWorkspace, onChange, go
     const sent = await assistant.send({
       kind: 'lore', mode, model: modelFor(project, 'plan'), maxTokens: project.maxTokens,
       context: { ...projectNotesForRequest(project), manuscriptMemory: memoryForPrompt(project) },
-      card, draft: entry.draft,
+      card, draft: entry.draft, systemPrompt: project.notePrompts?.lore,
     }, message, project)
     if (entry !== editorEntry) return
     if (sent) assistantPrompt.value = ''

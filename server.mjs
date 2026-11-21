@@ -5,7 +5,7 @@ import { loadEnvFile } from 'node:process'
 import { fileURLToPath } from 'node:url'
 import {
   assistantHistoryTurns, assistantMessageLimit, assistantNoteDraftLimit, assistantReplyLimit,
-  completionPayload, defaultMemoryPrompt, defaultNoteSystemPrompt, defaultRevisionPrompt, defaultSystemPrompt,
+  completionPayload, defaultLoreSystemPrompt, defaultMemoryPrompt, defaultNoteSystemPrompt, defaultRevisionPrompt, defaultSystemPrompt,
   defaultReferences, effectiveSystemPrompt, freeModel, memoryExcerptLimit, memoryOutputLimit, modelIdPattern, validModelId,
   noteDraftActions, noteKinds, orderedWritingContext, revisionParagraphLimit, systemPromptLimit,
   writingFields, writingTokenLimits,
@@ -255,7 +255,7 @@ function assistantCompletion({ kind, mode, model, maxTokens, target, messages, c
     if (!validLoreCardFields(card, { allowIncomplete: true }) || (draft !== null && !validLoreCardFields(draft))) {
       throw new RequestError(400, '로어북 카드와 초안 내용을 확인해 주세요.')
     }
-    instruction = '소설의 로어북 카드를 작성하는 편집 도우미입니다. 작품 메모와 현재 카드의 설정을 유지하며 작가와 개선 방향을 의논하세요.'
+    instruction = resolveSystemPrompt(systemPrompt, defaultLoreSystemPrompt)
     draftFormat = [
       '수정 사항을 반영한 카드 전체를 {"kind":"character", "name":"이름", "aliases":[], "description":"설명", "priority":0, "always":false} 형식으로 작성하세요.',
       `kind는 ${Object.entries(loreKinds).map(([key, label]) => `${key}(${label})`).join(', ')} 중 하나입니다.`,

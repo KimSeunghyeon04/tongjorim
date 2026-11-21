@@ -50,7 +50,7 @@ function validPrompts(source) {
   const { systemPrompt, notePrompts, references, authorMode } = source
   return optional(systemPrompt, validPrompt) && optional(references, validReferences) && optional(authorMode, validMode) &&
     optional(notePrompts, prompts => record(prompts) && Object.entries(prompts).every(([key, text]) =>
-      (['memory', 'revision'].includes(key) || Object.hasOwn(noteKinds, key)) && validPrompt(text)))
+      (['memory', 'revision', 'lore'].includes(key) || Object.hasOwn(noteKinds, key)) && validPrompt(text)))
 }
 
 export function hasSceneNote(note) {
