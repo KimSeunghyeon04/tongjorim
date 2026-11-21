@@ -20,7 +20,7 @@ function action(label, title, click) {
   return button
 }
 
-export function setupResearch({ get, currentProject, saveWorkspace, onChange, goToPassage }) {
+export function setupResearch({ get, currentProject, saveWorkspace, onChange, goToPassage, passagePosition }) {
   const cache = new WeakMap()
   const localSearch = new WeakMap()
   const loreSessions = new WeakMap()
@@ -147,7 +147,7 @@ export function setupResearch({ get, currentProject, saveWorkspace, onChange, go
     if (entry !== editorEntry) return
     if (sent) assistantPrompt.value = ''
     syncAssistant()
-    if (document.activeElement === document.body && editor.open && !get('references-panel').hidden) {
+    if (document.activeElement === document.body && editor.open && !get('lore-panel').hidden) {
       assistantPrompt.focus()
     }
   }
@@ -536,7 +536,7 @@ export function setupResearch({ get, currentProject, saveWorkspace, onChange, go
     get('past-search-summary').textContent = status
     get('past-reading-list').replaceChildren(...(hits.length ? hits.map(hit => {
       const item = element('li', '')
-      const position = `원고 ${hit.start + 1}–${hit.end}자`
+      const position = passagePosition(hit)
       item.append(action(position, `${position}로 이동`, () => goToPassage(hit)))
       item.append(element('p', hit.text))
       return item

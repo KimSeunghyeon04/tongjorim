@@ -6,7 +6,7 @@ const tokens = value => `${number.format(value)}토큰`
 const characters = value => `${number.format(value)}자`
 const fields = Object.keys(maxSourceLimits)
 
-export function setupSourcePanel({ get, currentProject, getModel, research, saveWorkspace, onSave, onSearch, goToPassage }) {
+export function setupSourcePanel({ get, currentProject, getModel, research, saveWorkspace, onSave, onSearch, goToPassage, passagePosition }) {
   const panel = get('source-settings')
   const save = get('save-source-limits')
   const reset = get('reset-source-limits')
@@ -32,7 +32,7 @@ export function setupSourcePanel({ get, currentProject, getModel, research, save
     const button = document.createElement('button')
     button.type = 'button'
     button.className = 'quiet-button'
-    button.textContent = `원고 ${number.format(start + 1)}–${characters(end)}`
+    button.textContent = passagePosition({ start, end })
     button.addEventListener('click', () => goToPassage({ start, end, text }))
     const excerpt = document.createElement('p')
     const sample = Array.from(text.trimStart().slice(0, 108))

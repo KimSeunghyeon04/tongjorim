@@ -2,7 +2,7 @@ import { freeModel, requestCompletion, settingsChangeEvent } from './completion.
 import { withModelOptions } from './model-options.mjs'
 import {
   appendParagraphs, completionPayload, defaultMemoryPrompt, defaultNoteSystemPrompt, defaultRevisionPrompt, defaultSystemPrompt,
-  effectiveSystemPrompt, memoryOutputLimit, modelFor, normalizeLineEndings, noteKinds, projectNotesForRequest, referenceLabels,
+  effectiveSystemPrompt, memoryOutputLimit, modelFor, normalizeLineEndings, noteDraftActions, noteKinds, projectNotesForRequest, referenceLabels,
   systemPromptLimit, writingFields,
 } from './writing-config.mjs'
 import { assistantMessageLimit, assistantNoteDraftLimit, createWritingAssistant, projectNotesLimitHint } from './writing-assistant.mjs'
@@ -15,27 +15,53 @@ import { paragraphRanges } from './retrieval.mjs'
 import { combineUsage, completionEstimate, estimateLabel, jsonRequest, usageLabel } from './request-tools.mjs'
 
 const get = id => document.getElementById(id)
+
+function proposalView(id) {
+  return {
+    section: get(id),
+    title: get(`${id}-title`),
+    model: get(`${id}-model`),
+    status: get(`${id}-status`),
+    usage: get(`${id}-usage`),
+    body: get(`${id}-body`),
+    actions: get(`${id}-actions`),
+    stop: get(`${id}-stop`),
+    discard: get(`${id}-discard`),
+    accept: get(`${id}-accept`),
+  }
+}
+
 const projectSelect = get('project-select')
 const manuscript = get('manuscript')
+const manuscriptLines = get('manuscript-lines')
+const revisionLine = get('revision-line')
 const projectTitle = get('project-title')
+const projectTitleDialog = get('project-title-dialog')
 const promptTarget = get('prompt-target')
 const systemPrompt = get('system-prompt')
 const resetSystemPrompt = get('reset-system-prompt')
+const promptDialog = get('prompt-dialog')
+const projectNoteDialog = get('project-note-dialog')
+const projectNoteContent = get('project-note-content')
+const projectNoteSections = [...projectNoteContent.querySelectorAll('[data-project-note]')]
 const noteFields = {
   synopsis: 'synopsis',
   'character-notes': 'characterNotes',
   'world-notes': 'worldNotes',
 }
 const generate = get('generate')
-const proposalSection = get('proposal')
-const proposalBody = get('proposal-body')
-const stop = get('stop-generation')
-const accept = get('accept-proposal')
-const discard = get('discard-proposal')
+const continuationProposal = proposalView('proposal')
+const revisionProposal = proposalView('revision-proposal')
 const notePlanner = get('note-planner')
-const openNoteWorkspace = get('open-note-workspace')
+const manuscriptTab = get('manuscript-tab')
+const noteWorkspaceTab = get('note-workspace-tab')
+const workspaceTabs = [manuscriptTab, noteWorkspaceTab]
+const writingTools = get('writing-tools')
+const toolButtons = [...writingTools.querySelectorAll('[data-panel]')]
+let manuscriptPanel = 'tools'
 const planStatus = get('plan-status')
 const planTarget = get('plan-target')
+const planAction = get('plan-action')
 const planIdea = get('plan-idea')
 const planGenerate = get('plan-generate')
 const planSend = get('plan-send')
@@ -44,15 +70,16 @@ const planReset = get('plan-reset')
 const planTranscript = get('plan-transcript')
 const planDraftText = get('note-draft-text')
 const planAccept = get('plan-accept')
+const planUndoReplacement = get('plan-undo-replacement')
 const memoryPanel = get('manuscript-memory')
 const memoryAuto = get('memory-auto')
 const memoryRefresh = get('memory-refresh')
 const memoryStop = get('memory-stop')
 const memoryStatus = get('memory-status')
-const memoryShortStatus = get('memory-short-status')
 const memoryText = get('memory-text')
 const formatNumber = new Intl.NumberFormat('ko-KR')
-const previews = new Map()
+const continuationPreviews = new Map()
+let revisionPreview
 const plans = new WeakMap()
 const memoryJobs = new WeakMap()
 let models = [freeModel]
@@ -60,6 +87,8 @@ let activeRequest
 let activePreview
 let previewOrigin
 let revisionSelection
+let indexedManuscript
+let manuscriptLineStarts = [0]
 let savedVersion
 let storageReadable = true
 let storageWarning = ''
@@ -84,9 +113,15 @@ const planAssistant = createWritingAssistant({
   scrollport: get('plan-conversation'),
   status: planStatus,
   onChange: syncControls,
-  onReply({ draft }) {
+  onReply({ draft, truncated }, { noteAction, target, context }) {
+    if (noteAction === 'replace' && truncated) {
+      planStatus.textContent = currentPlanEntry().drafts.replace
+        ? '새 수정안이 출력 한도에 걸렸어요. 화면에는 직전 수정안이 표시돼요.'
+        : '수정안이 출력 한도에 걸렸어요. 더 짧게 요청하거나 생성 한도를 올려 주세요.'
+      return
+    }
     if (draft === null) return
-    currentPlanEntry().draft = draft
+    currentPlanEntry().drafts[noteAction] = { text: draft, original: context[target] }
     renderPlanDraft()
   },
 })
@@ -141,9 +176,7 @@ function renderProjectSelect() {
 }
 
 function renderLegacySceneNotes(notes = []) {
-  const archive = get('legacy-scene-notes')
-  archive.hidden = !notes.length
-  archive.open = false
+  get('open-legacy-notes').hidden = !notes.length
   get('legacy-notes-list').replaceChildren(...notes.map(note => {
     const row = document.createElement('li')
     const title = document.createElement('strong')
@@ -159,27 +192,94 @@ function renderLegacySceneNotes(notes = []) {
   }))
 }
 
-function switchPanel(name) {
-  for (const button of document.querySelectorAll('[data-panel]')) {
-    button.setAttribute('aria-pressed', String(button.dataset.panel === name))
+function switchPanel(name = manuscriptPanel) {
+  if (notePlanner.hidden) manuscriptPanel = name
+  const panel = notePlanner.hidden ? manuscriptPanel : 'notes'
+  for (const button of toolButtons) {
+    const selected = button.dataset.panel === panel
+    button.setAttribute('aria-pressed', String(selected))
+    get(button.getAttribute('aria-controls')).hidden = !selected
   }
-  get('generate-panel').hidden = name !== 'generate'
-  get('notes-panel').hidden = name !== 'notes'
-  get('prompt-panel').hidden = name !== 'prompt'
-  get('references-panel').hidden = name !== 'references'
+  writingTools.scrollTop = 0
+}
+
+function selectProjectNote(key) {
+  for (const section of projectNoteSections) {
+    section.hidden = section.dataset.projectNote !== key
+  }
+}
+
+function renderSidebarContext() {
+  const onNote = !notePlanner.hidden
+  writingTools.dataset.workspace = onNote ? 'note' : 'manuscript'
+  writingTools.setAttribute('aria-label', onNote ? '선택한 작품 메모' : '집필 도구')
+  const host = get(onNote ? 'notes-panel' : 'project-note-body')
+  if (projectNoteContent.parentElement !== host) host.append(projectNoteContent)
+  if (onNote) selectProjectNote(currentPlan().target)
+  renderPromptEditor()
 }
 
 function updateCharacterCount() {
   get('character-count').textContent = `${formatNumber.format(manuscript.value.length)}자`
+  renderManuscriptLines()
 }
+
+function syncManuscriptGutter() {
+  manuscriptLines.style.width = `${manuscript.clientWidth}px`
+  manuscriptLines.style.translate = `0 ${-manuscript.scrollTop}px`
+}
+
+function renderManuscriptLines() {
+  const text = manuscript.value
+  if (text === indexedManuscript) return
+  indexedManuscript = text
+  const lines = text.split('\n')
+  manuscriptLineStarts = []
+  let offset = 0
+  const pending = document.createDocumentFragment()
+  lines.forEach((line, index) => {
+    manuscriptLineStarts.push(offset)
+    offset += line.length + 1
+    const row = manuscriptLines.children[index] ?? pending.appendChild(document.createElement('div'))
+    const content = line || '\u200b'
+    if (row.textContent !== content) row.textContent = content
+  })
+  while (manuscriptLines.children.length > lines.length) manuscriptLines.lastElementChild.remove()
+  manuscriptLines.append(pending)
+  manuscriptLines.parentElement.parentElement.style.setProperty('--line-number-digits', String(lines.length).length)
+  revisionLine.max = lines.length
+  revisionLine.setCustomValidity('')
+  syncManuscriptGutter()
+}
+
+function manuscriptLineAt(offset) {
+  let first = 1
+  let last = manuscriptLineStarts.length
+  while (first < last) {
+    const middle = Math.floor((first + last) / 2)
+    if (manuscriptLineStarts[middle] <= offset) first = middle + 1
+    else last = middle
+  }
+  return first
+}
+
+function manuscriptLineRange({ start, end }) {
+  const first = manuscriptLineAt(start)
+  const last = manuscriptLineAt(Math.max(start, end - 1))
+  return first === last ? `${formatNumber.format(first)}줄` :
+    `${formatNumber.format(first)}–${formatNumber.format(last)}줄`
+}
+
+const passagePosition = range => `원고 ${manuscriptLineRange(range)}`
 
 function renderWorkspace() {
   const project = currentProject()
   closeRequestPreview()
   revisionSelection = undefined
+  revisionLine.value = ''
+  revisionLine.setCustomValidity('')
   get('revision-direction').value = ''
   renderProjectSelect()
-  projectTitle.value = project.title
   manuscript.value = project.manuscript
   manuscript.scrollTop = manuscript.scrollHeight
   get('direction').value = project.direction
@@ -189,9 +289,8 @@ function renderWorkspace() {
     showNoteStatus(id)
   }
   renderLegacySceneNotes(project.legacySceneNotes)
-  renderPromptEditor()
   updateCharacterCount()
-  renderProposal()
+  renderContinuationProposal()
   renderPlanner()
   renderMemory()
   research.render()
@@ -201,40 +300,35 @@ function renderWorkspace() {
 
 function syncControls() {
   const busy = Boolean(activeRequest || planAssistant.busy)
-  openNoteWorkspace.disabled = Boolean(activeRequest)
   for (const element of [generate, projectSelect, get('add-project'), get('open-files')]) {
     element.disabled = busy
   }
   for (const id of ['preview-request', 'preview-semantic-search', 'retry-search']) {
     get(id).disabled = busy || Boolean(activePreview)
   }
-  generate.textContent = activeRequest && !activeRequest.preview.revision ? '생성 중…' : '이어서 쓰기'
+  generate.textContent = activeRequest?.view === continuationProposal ? '생성 중…' : '이어서 쓰기'
   get('generate-revision').disabled = busy || !selectedRevision()
   updatePlanControls()
 }
 
-function renderProposal() {
-  const preview = previews.get(currentProject().id)
-  proposalSection.hidden = !preview
-  if (!preview) return
-  get('proposal-title').textContent = preview.revision ? '문단 퇴고안' : '이어쓰기 초안'
-  get('proposal-original').hidden = !preview.revision
-  get('proposal-original').open = false
-  get('proposal-original-text').textContent = preview.revision?.text ?? ''
-  get('proposal-model').textContent = preview.model
-  get('proposal-usage').hidden = !preview.usage
-  get('proposal-usage').textContent = preview.usage ? usageLabel(preview.usage) : ''
-  proposalBody.hidden = !preview.text.trim()
-  proposalBody.textContent = preview.text
-  updateProposalActions()
+function renderContinuationProposal() {
+  const preview = continuationPreviews.get(currentProject().id)
+  continuationProposal.section.hidden = !preview
+  if (preview) renderProposal(continuationProposal, preview)
 }
 
-function updateProposalActions() {
-  const project = currentProject()
-  const preview = previews.get(project.id)
-  if (!preview) return
-  const changed = project.manuscript !== preview.original
-  const pending = activeRequest?.preview
+function renderProposal(view, preview) {
+  view.model.textContent = preview.model
+  view.usage.hidden = !preview.usage
+  view.usage.textContent = preview.usage ? usageLabel(preview.usage) : ''
+  if (!preview.revision) view.body.hidden = !preview.text.trim()
+  if (view.body.textContent !== preview.text) view.body.textContent = preview.text
+  updateProposalActions(view, preview)
+}
+
+function updateProposalActions(view, preview) {
+  const changed = currentProject().manuscript !== preview.original
+  const pending = activeRequest?.view === view ? activeRequest.preview : undefined
   let status = preview.retryStatus ?? preview.status
   if (pending && pending !== preview) {
     status = `${pending.status} 아래는 이전 초안이에요.`
@@ -242,13 +336,19 @@ function updateProposalActions() {
     const stale = '생성 요청 후 원고가 바뀌었어요. 다시 요청해 주세요.'
     status = preview.retryStatus ? `${status} ${stale}` : stale
   }
-  const feedback = get('proposal-status')
-  if (feedback.textContent !== status) feedback.textContent = status
-  accept.textContent = preview.revision ? '이 문단 교체' : '원고에 추가'
-  accept.hidden = Boolean(activeRequest)
-  accept.disabled = changed || !preview.text.trim() || (Boolean(preview.revision) && !preview.complete)
-  discard.hidden = Boolean(activeRequest)
-  stop.hidden = !activeRequest
+  if (view.status.textContent !== status) view.status.textContent = status
+  const hideActions = !preview.revision && Boolean(pending)
+  view.accept.hidden = hideActions
+  view.accept.disabled = Boolean(pending) || changed || !preview.text.trim() || (Boolean(preview.revision) && !preview.complete)
+  view.discard.hidden = hideActions
+  view.stop.hidden = !pending
+}
+
+function closeRevisionProposal() {
+  if (activeRequest?.view === revisionProposal) activeRequest.controller.abort()
+  revisionPreview = undefined
+  revisionProposal.section.close()
+  manuscript.focus()
 }
 
 async function loadCatalog() {
@@ -322,8 +422,8 @@ function renderEstimates() {
 
   const paragraph = selectedRevision()
   const status = get('revision-selection')
-  status.textContent = paragraph ? `원고 ${formatNumber.format(paragraph.start + 1)}–${formatNumber.format(paragraph.end)}자 · 선택한 문단 전체를 다듬어요.`
-    : '원고에서 퇴고할 한 문단의 일부를 선택해 주세요.'
+  status.textContent = paragraph ? `${passagePosition(paragraph)} · 선택한 문단 전체를 다듬어요.`
+    : '줄 번호를 입력하거나 원고에서 한 문단의 일부를 선택해 주세요.'
   if (paragraph) {
     const { model, maxTokens, systemPrompt, ...context } = revisionBody(project, paragraph)
     get('revision-estimate').textContent = estimate(completionPayload(model, maxTokens,
@@ -341,6 +441,7 @@ function closeRequestPreview() {
   activePreview = undefined
   previewOrigin = undefined
   get('request-preview').hidden = true
+  get('preview-request').setAttribute('aria-expanded', 'false')
 }
 
 function writingInputsChanged() {
@@ -355,32 +456,27 @@ function goToPassage({ start, end, text }) {
   setNoteWorkspace(false)
   manuscript.focus()
   manuscript.setSelectionRange(start, end)
-  const style = getComputedStyle(manuscript)
-  const measure = document.createElement('div')
-  Object.assign(measure.style, {
-    position: 'fixed', visibility: 'hidden', width: `${manuscript.clientWidth}px`, whiteSpace: 'pre-wrap',
-    font: style.font, lineHeight: style.lineHeight, wordBreak: style.wordBreak, overflowWrap: style.overflowWrap,
-    letterSpacing: style.letterSpacing,
-  })
-  const marker = document.createElement('span')
-  marker.textContent = text.slice(0, 1)
-  measure.append(manuscript.value.slice(0, start), marker)
-  document.body.append(measure)
-  manuscript.scrollTop = marker.offsetTop - Math.floor(manuscript.clientHeight / 3)
-  measure.remove()
+  syncManuscriptGutter()
+  const line = manuscriptLineAt(start) - 1
+  const range = document.createRange()
+  range.setStart(manuscriptLines.children[line].firstChild, start - manuscriptLineStarts[line])
+  range.collapse(true)
+  const top = range.getBoundingClientRect().top - manuscriptLines.getBoundingClientRect().top
+  manuscript.scrollTop = top - Math.floor(manuscript.clientHeight / 3)
 }
 
-const research = setupResearch({ get, currentProject, saveWorkspace, onChange: writingInputsChanged, goToPassage })
+const research = setupResearch({ get, currentProject, saveWorkspace, onChange: writingInputsChanged, goToPassage, passagePosition })
 const catalogModel = id => models.find(model => model.id === id)
 const sourcePanel = setupSourcePanel({
   get, currentProject, getModel: catalogModel, research, saveWorkspace, onSave: writingInputsChanged,
-  onSearch: renderEstimates, goToPassage,
+  onSearch: renderEstimates, goToPassage, passagePosition,
 })
 
 async function showRequestPreview({ refreshSemantic = false, origin } = {}) {
   if (activePreview || activeRequest || planAssistant.busy) return
   setNoteWorkspace(false)
-  if (origin) previewOrigin = origin
+  if (origin) previewOrigin = { button: origin, panel: manuscriptPanel }
+  switchPanel('tools')
   const project = currentProject()
   const controller = new AbortController()
   activePreview = controller
@@ -389,6 +485,7 @@ async function showRequestPreview({ refreshSemantic = false, origin } = {}) {
   const data = get('request-preview-data')
   const semanticAction = get('preview-semantic-action')
   get('request-preview').hidden = false
+  get('preview-request').setAttribute('aria-expanded', 'true')
   data.hidden = true
   semanticAction.hidden = true
   status.textContent = refreshSemantic ? '참고 원문을 다시 찾는 중이에요.' : '미리보기를 준비하는 중이에요.'
@@ -404,9 +501,12 @@ async function showRequestPreview({ refreshSemantic = false, origin } = {}) {
     controller.signal.throwIfAborted()
     const blocks = [
       ['시스템 프롬프트', payload.messages[0].content],
-      ...Object.entries(JSON.parse(payload.messages[1].content)).map(([key, value]) => [
-        ({ projectTitle: '작품 제목', direction: '작가의 노트', ...referenceLabels })[key], value,
-      ]),
+      ...Object.entries(JSON.parse(payload.messages[1].content)).map(([key, value]) => {
+        const label = ({ projectTitle: '작품 제목', direction: '작가의 노트', ...referenceLabels })[key]
+        const position = key === 'manuscript' && value
+          ? manuscriptLineRange({ start: prepared.cutoff, end: prepared.cutoff + value.length }) : ''
+        return [position ? `${label} · ${position}` : label, value]
+      }),
     ]
     get('request-blocks').replaceChildren(...blocks.map(([label, value]) => {
       const details = document.createElement('details')
@@ -437,22 +537,32 @@ async function generateDraft(revision) {
   if (activeRequest || planAssistant.busy) return
   setNoteWorkspace(false)
   const project = currentProject()
-  const previous = previews.get(project.id)
+  const view = revision ? revisionProposal : continuationProposal
+  const previous = revision ? undefined : continuationPreviews.get(project.id)
   const retained = previous?.complete ? previous : undefined
   const oneTimeNote = !revision && project.authorMode === 'once' ? project.direction : undefined
   const preview = {
     original: project.manuscript, revision, text: '', model: '',
     status: revision ? '수정안을 준비하는 중이에요.' : '전송할 원고와 자료를 준비하는 중이에요.',
   }
-  if (!retained) previews.set(project.id, preview)
-
   const controller = new AbortController()
-  activeRequest = { controller, preview }
+  activeRequest = { controller, preview, view }
   syncControls()
-  renderProposal()
-  get('proposal-title').focus()
+  if (revision) {
+    revisionPreview = preview
+    get('revision-proposal-position').textContent = passagePosition(revision)
+    get('revision-original-text').textContent = revision.text
+    renderProposal(view, preview)
+    view.section.showModal()
+    get('revision-original-text').scrollTop = 0
+    view.body.scrollTop = 0
+  } else {
+    if (!retained) continuationPreviews.set(project.id, preview)
+    renderContinuationProposal()
+    view.title.focus()
+  }
   const output = retained ? null : document.createTextNode('')
-  if (output) proposalBody.replaceChildren(output)
+  if (output) view.body.replaceChildren(output)
 
   try {
     let body
@@ -467,10 +577,11 @@ async function generateDraft(revision) {
     const result = await requestCompletion(revision ? '/api/revise' : '/api/write', withModelOptions(project, body), {
       signal: controller.signal,
       onText(content) {
+        if (controller.signal.aborted) return
         if (!preview.text.trim()) {
-          if (output) proposalBody.hidden = false
+          if (output) view.body.hidden = false
           preview.status = '초안을 작성하고 있어요.'
-          updateProposalActions()
+          updateProposalActions(view, retained ?? preview)
         }
         preview.text += content
         output?.appendData(content)
@@ -489,13 +600,16 @@ async function generateDraft(revision) {
     preview.status = completionFailure(error, controller.signal)
   } finally {
     if (retained) {
-      if (preview.complete) previews.set(project.id, preview)
+      if (preview.complete) continuationPreviews.set(project.id, preview)
       else retained.retryStatus = `${preview.status} 이전 초안을 유지했어요.`
     }
     activeRequest = undefined
     syncControls()
-    renderProposal()
-    if (document.activeElement === document.body) get('proposal-title').focus()
+    if (!revision || view.section.open) {
+      renderProposal(view, retained && !preview.complete ? retained : preview)
+      if (document.activeElement === document.body) view.title.focus({ preventScroll: true })
+      if (!revision && document.activeElement === view.title) view.actions.scrollIntoView({ block: 'nearest' })
+    }
   }
 }
 
@@ -529,9 +643,6 @@ function renderMemory() {
       : remaining ? `아직 메모에 반영할 원고가 ${formatNumber.format(remaining)}자 남았어요.`
       : '현재 원고까지 갱신했어요.')
   if (memoryStatus.textContent !== message) memoryStatus.textContent = message
-  const short = running ? '갱신 중…' : job?.error ? '갱신 중단'
-    : project.manuscriptMemory && remaining ? '갱신 필요' : text ? '갱신 완료' : ''
-  if (memoryShortStatus.textContent !== short) memoryShortStatus.textContent = short
 }
 
 async function refreshProjectMemory(project) {
@@ -566,7 +677,7 @@ async function refreshProjectMemory(project) {
   } finally {
     job.controller = null
     refreshVisible()
-    if (project === currentProject() && !get('notes-panel').hidden && memoryPanel.open &&
+    if (project === currentProject() && projectNoteDialog.open && !memoryPanel.hidden &&
         document.activeElement === document.body) memoryStatus.focus()
   }
 }
@@ -574,7 +685,9 @@ async function refreshProjectMemory(project) {
 function currentPlan() {
   const project = currentProject()
   if (!plans.has(project)) {
-    const entries = Object.fromEntries(Object.keys(noteKinds).map(target => [target, { idea: '', draft: null }]))
+    const entries = Object.fromEntries(Object.keys(noteKinds).map(target => [target, {
+      idea: '', action: 'append', drafts: { append: null, replace: null }, lastReplacement: null,
+    }]))
     plans.set(project, { target: 'synopsis', entries })
   }
   return plans.get(project)
@@ -590,7 +703,14 @@ function setNoteWorkspace(visible) {
   if (!visible) planAssistant.rememberScroll()
   notePlanner.hidden = !visible
   get('manuscript-view').hidden = visible
-  openNoteWorkspace.setAttribute('aria-expanded', String(visible))
+  const activeTab = visible ? noteWorkspaceTab : manuscriptTab
+  for (const tab of workspaceTabs) {
+    const selected = tab === activeTab
+    tab.setAttribute('aria-selected', String(selected))
+    tab.tabIndex = selected ? 0 : -1
+  }
+  renderSidebarContext()
+  switchPanel()
   if (visible) planAssistant.restoreScroll()
 }
 
@@ -598,9 +718,11 @@ function renderPlanner() {
   const { target } = currentPlan()
   const entry = currentPlanEntry()
   planTarget.value = target
+  planAction.value = entry.action
   planIdea.value = entry.idea
   planIdea.placeholder = noteKinds[target].placeholder
   planAssistant.useConversation(entry)
+  renderSidebarContext()
   renderPlanContextLimit()
   renderPlanDraft()
   updatePlanControls()
@@ -615,35 +737,76 @@ function renderPlanContextLimit() {
 
 function renderPlanDraft() {
   const { target } = currentPlan()
-  const { draft } = currentPlanEntry()
+  const { action, drafts } = currentPlanEntry()
+  const draft = drafts[action]
+  const title = action === 'replace' ? '수정안' : '초안'
   get('note-draft').hidden = draft === null
-  get('note-draft-title').textContent = `${noteKinds[target].label} 초안`
-  planDraftText.value = draft ?? ''
+  get('note-draft-title').textContent = `${noteKinds[target].label} ${title}`
+  get('note-draft-replace-hint').hidden = action !== 'replace'
+  get('plan-show-draft').textContent = `${title} 보기`
+  get('plan-discard').textContent = `${title} 버리기`
+  planDraftText.value = draft?.text ?? ''
+}
+
+function planDraftResult(target, original, action, draft) {
+  const text = draft?.text.trim() ?? ''
+  if (!text) return { text, message: '' }
+  const replacing = action === 'replace'
+  if (replacing && draft.original !== original) {
+    return { text, message: '수정안을 만든 뒤 기존 메모가 바뀌었어요. 새 수정안을 만들어 주세요.' }
+  }
+  const result = replacing ? text : appendParagraphs(original, text)
+  if (result.length <= writingFields[target]) return { text: result, message: '' }
+  const message = replacing
+    ? `교체하려면 수정안을 ${formatNumber.format(writingFields[target])}자 이내로 줄여 주세요.`
+    : '메모에 추가하려면 기존 메모나 초안의 길이를 줄여 주세요.'
+  return { text: result, message }
+}
+
+function savePlanNote(target, text, rollbackOnFailure) {
+  const project = currentProject()
+  const previous = project[target]
+  project[target] = text
+  const saved = saveWorkspace()
+  if (!saved && rollbackOnFailure) project[target] = previous
+  const fieldId = Object.keys(noteFields).find(id => noteFields[id] === target)
+  const field = get(fieldId)
+  field.value = project[target] ?? ''
+  return { saved, field }
 }
 
 function updatePlanControls() {
   const planning = planAssistant.busy
+  const { target } = currentPlan()
+  const { action, drafts, lastReplacement } = currentPlanEntry()
+  const replacing = action === 'replace'
+  const draft = drafts[action]
+  const original = currentProject()[target] ?? ''
+  const tooLongToReplace = replacing && original.length > writingFields[target]
   planTarget.disabled = planning
+  planAction.disabled = planning
   planIdea.readOnly = planning
   planGenerate.hidden = planning
-  planGenerate.disabled = Boolean(activeRequest)
+  planGenerate.textContent = replacing ? '수정안 만들기' : '초안 만들기'
+  planGenerate.disabled = Boolean(activeRequest) || tooLongToReplace
   planSend.hidden = planning
-  planSend.disabled = Boolean(activeRequest) || !planIdea.value.trim()
+  planSend.disabled = Boolean(activeRequest) || tooLongToReplace || !planIdea.value.trim()
   planStop.hidden = !planning
   planReset.disabled = planning || planTranscript.hidden
+  get('plan-revision-limit').hidden = !tooLongToReplace
 
-  const { target } = currentPlan()
-  const { draft } = currentPlanEntry()
   get('plan-empty').hidden = !planTranscript.hidden || draft !== null
   get('plan-show-draft').hidden = draft === null
-  const text = draft?.trim() ?? ''
-  const tooLong = appendParagraphs(currentProject()[target] ?? '', text).length > writingFields[target]
+  planUndoReplacement.hidden = !lastReplacement || lastReplacement.after !== original
+  planUndoReplacement.disabled = planning
+  const { text, message } = planDraftResult(target, original, action, draft)
   const status = get('note-draft-status')
-  status.hidden = !tooLong
-  if (tooLong && !status.textContent) status.textContent = '메모에 추가하려면 기존 메모나 초안의 길이를 줄여 주세요.'
+  status.hidden = !message
+  if (status.textContent !== message) status.textContent = message
   planDraftText.readOnly = planning
   get('plan-discard').disabled = planning
-  planAccept.disabled = planning || tooLong || !text
+  planAccept.textContent = replacing ? '기존 메모 교체' : '메모에 추가'
+  planAccept.disabled = planning || Boolean(message) || !text
 }
 
 async function sendPlanMessage(mode) {
@@ -651,9 +814,16 @@ async function sendPlanMessage(mode) {
   const project = currentProject()
   const { target } = currentPlan()
   const entry = currentPlanEntry()
+  const { action, drafts } = entry
+  const replacing = action === 'replace'
+  const original = project[target] ?? ''
+  if (replacing && original.length > writingFields[target]) return
   const idea = entry.idea
-  const previousDraft = entry.draft
-  const message = idea.trim() || (mode === 'draft' ? '작품 메모와 지금까지의 대화를 바탕으로 초안을 작성해 주세요.' : '')
+  const previousDraft = drafts[action]
+  const reusableDraft = !replacing || previousDraft?.original === original ? previousDraft?.text.trim() : ''
+  const draftRequest = replacing ? '지금까지의 대화를 반영해 기존 메모 전체의 수정안을 작성해 주세요.'
+    : '작품 메모와 지금까지의 대화를 바탕으로 초안을 작성해 주세요.'
+  const message = idea.trim() || (mode === 'draft' ? draftRequest : '')
   if (!message) return
   entry.idea = ''
   planIdea.value = ''
@@ -663,19 +833,20 @@ async function sendPlanMessage(mode) {
     model: modelFor(project, 'plan'),
     maxTokens: project.maxTokens,
     target,
+    noteAction: action,
     context: {
       ...projectNotesForRequest(project),
       manuscriptMemory: memoryForPrompt(project),
     },
     systemPrompt: project.notePrompts?.[target],
-    draft: previousDraft?.trim() || null,
+    draft: reusableDraft || null,
   }, message, project)
   if (!sent) entry.idea = idea
   if (currentPlanEntry() !== entry) return
   planIdea.value = entry.idea
   updatePlanControls()
   if (document.activeElement === document.body && !notePlanner.hidden) {
-    const receivedDraft = mode === 'draft' && sent && entry.draft !== null && entry.draft !== previousDraft
+    const receivedDraft = mode === 'draft' && sent && drafts[action] && drafts[action] !== previousDraft
     const field = receivedDraft ? planDraftText : planIdea
     field.focus()
   }
@@ -690,8 +861,10 @@ function bindField(id, update) {
   })
 }
 
+const currentPromptTarget = () => notePlanner.hidden ? promptTarget.value : currentPlan().target
+
 function currentPromptDefault() {
-  const target = promptTarget.value
+  const target = currentPromptTarget()
   if (target === 'continuation') return defaultSystemPrompt
   if (target === 'memory') return defaultMemoryPrompt
   return target === 'revision' ? defaultRevisionPrompt : defaultNoteSystemPrompt(target)
@@ -699,8 +872,10 @@ function currentPromptDefault() {
 
 function renderPromptEditor() {
   const project = currentProject()
-  const target = promptTarget.value
+  const target = currentPromptTarget()
   const value = target === 'continuation' ? project.systemPrompt : project.notePrompts?.[target]
+  get('manuscript-prompt-target').hidden = !notePlanner.hidden
+  get('system-prompt-label').textContent = notePlanner.hidden ? '시스템 프롬프트' : `${noteKinds[target].label} 도우미 프롬프트`
   systemPrompt.value = value ?? currentPromptDefault()
   systemPrompt.scrollTop = 0
   updatePromptControls()
@@ -708,7 +883,7 @@ function renderPromptEditor() {
 
 function setPromptOverride(value) {
   const project = currentProject()
-  const target = promptTarget.value
+  const target = currentPromptTarget()
   if (target === 'continuation') {
     project.systemPrompt = value
   } else {
@@ -801,18 +976,15 @@ function bindNoteImport(id, key) {
   })
 }
 
-bindField('project-title', value => {
-  const project = currentProject()
-  project.title = value
-  projectSelect.selectedOptions[0].textContent = projectName(project)
-  get('active-project-name').textContent = projectName(project)
-})
 bindField('manuscript', value => {
   setManuscriptText(currentProject(), value)
   updateCharacterCount()
-  updateProposalActions()
+  const preview = continuationPreviews.get(currentProject().id)
+  if (preview) updateProposalActions(continuationProposal, preview)
   renderMemory()
 })
+manuscript.addEventListener('scroll', syncManuscriptGutter)
+new ResizeObserver(syncManuscriptGutter).observe(manuscript)
 bindField('direction', value => { currentProject().direction = value })
 get('author-mode').addEventListener('change', event => {
   currentProject().authorMode = event.target.value
@@ -820,9 +992,24 @@ get('author-mode').addEventListener('change', event => {
   writingInputsChanged()
 })
 for (const event of ['select', 'mouseup', 'keyup']) manuscript.addEventListener(event, updateRevision)
+revisionLine.addEventListener('input', () => revisionLine.setCustomValidity(''))
+get('revision-line-form').addEventListener('submit', event => {
+  event.preventDefault()
+  const line = revisionLine.valueAsNumber - 1
+  const start = manuscriptLineStarts[line]
+  const end = manuscriptLineStarts[line + 1] ?? manuscript.value.length
+  const paragraph = paragraphRanges(manuscript.value).find(item => item.start < end && item.end > start)
+  if (paragraph) {
+    goToPassage(paragraph)
+    updateRevision()
+  } else {
+    revisionLine.setCustomValidity('본문이 있는 줄 번호를 입력해 주세요.')
+    revisionLine.reportValidity()
+  }
+})
 get('open-revision').addEventListener('click', () => {
   updateRevision()
-  switchPanel('generate')
+  switchPanel('tools')
   get('revision').open = true
   get('revision').querySelector('summary').focus()
 })
@@ -838,13 +1025,9 @@ get('close-request-preview').addEventListener('click', () => {
   const origin = previewOrigin
   closeRequestPreview()
   syncControls()
-  if (origin?.getClientRects().length) origin.focus()
+  if (origin) switchPanel(origin.panel)
+  if (origin?.button.getClientRects().length) origin.button.focus()
   else document.querySelector('.tool-switcher [aria-pressed="true"]').focus()
-})
-get('open-memory').addEventListener('click', () => {
-  switchPanel('notes')
-  memoryPanel.open = true
-  memoryPanel.querySelector('summary').focus()
 })
 memoryAuto.addEventListener('change', () => {
   currentProject().autoMemory = memoryAuto.checked
@@ -857,28 +1040,46 @@ memoryRefresh.addEventListener('click', () => {
 memoryStop.addEventListener('click', () => memoryJobs.get(currentProject())?.controller?.abort())
 for (const [id, key] of Object.entries(noteFields)) bindNoteImport(id, key)
 planTarget.replaceChildren(...Object.entries(noteKinds).map(([key, kind]) => new Option(kind.label, key)))
-promptTarget.append(...Object.entries(noteKinds).map(([key, kind]) => new Option(`${kind.label} 도우미`, key)))
 promptTarget.addEventListener('change', renderPromptEditor)
-openNoteWorkspace.addEventListener('click', () => {
-  setNoteWorkspace(true)
-  get('note-workspace-title').focus()
-})
-get('close-note-workspace').addEventListener('click', () => {
-  setNoteWorkspace(false)
-  get('active-project-name').focus()
-})
-get('edit-plan-prompt').addEventListener('click', () => {
-  promptTarget.value = currentPlan().target
-  renderPromptEditor()
-  setNoteWorkspace(false)
-  switchPanel('prompt')
-  systemPrompt.focus()
-})
+for (const tab of workspaceTabs) {
+  tab.addEventListener('click', () => setNoteWorkspace(tab === noteWorkspaceTab))
+  tab.addEventListener('keydown', event => {
+    let nextTab
+    if (event.key === 'Home') nextTab = manuscriptTab
+    else if (event.key === 'End') nextTab = noteWorkspaceTab
+    else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') nextTab = workspaceTabs.find(item => item !== tab)
+    if (!nextTab) return
+    event.preventDefault()
+    setNoteWorkspace(nextTab === noteWorkspaceTab)
+    nextTab.focus()
+  })
+}
+for (const id of ['edit-manuscript-prompt', 'edit-plan-prompt']) {
+  get(id).addEventListener('click', () => {
+    renderPromptEditor()
+    promptDialog.showModal()
+    systemPrompt.focus()
+  })
+}
+for (const button of writingTools.querySelectorAll('[data-open-project-note]')) {
+  button.addEventListener('click', () => {
+    const key = button.dataset.openProjectNote
+    selectProjectNote(key)
+    get('project-note-title').textContent = Object.hasOwn(noteKinds, key) ? '작품 메모' : button.textContent.trim()
+    projectNoteDialog.showModal()
+  })
+}
 planIdea.maxLength = assistantMessageLimit
 planDraftText.maxLength = assistantNoteDraftLimit
 planTarget.addEventListener('change', () => {
   currentPlan().target = planTarget.value
   renderPlanner()
+})
+planAction.addEventListener('change', () => {
+  if (!noteDraftActions.includes(planAction.value) || planAssistant.busy) return
+  currentPlanEntry().action = planAction.value
+  renderPlanDraft()
+  updatePlanControls()
 })
 planIdea.addEventListener('input', () => {
   currentPlanEntry().idea = planIdea.value
@@ -897,11 +1098,14 @@ planReset.addEventListener('click', () => {
 })
 planDraftText.addEventListener('input', () => {
   if (planAssistant.busy) return
-  currentPlanEntry().draft = planDraftText.value
+  const { drafts, action } = currentPlanEntry()
+  if (!drafts[action]) return
+  drafts[action].text = planDraftText.value
   updatePlanControls()
 })
 get('plan-discard').addEventListener('click', () => {
-  currentPlanEntry().draft = null
+  const { drafts, action } = currentPlanEntry()
+  drafts[action] = null
   renderPlanDraft()
   updatePlanControls()
   planIdea.focus()
@@ -909,21 +1113,42 @@ get('plan-discard').addEventListener('click', () => {
 planAccept.addEventListener('click', () => {
   const { target } = currentPlan()
   const entry = currentPlanEntry()
-  if (!entry.draft || planAssistant.busy || planAccept.disabled) return
-  const project = currentProject()
-  const text = appendParagraphs(project[target] ?? '', entry.draft.trim())
-  project[target] = text
-  const fieldId = Object.keys(noteFields).find(id => noteFields[id] === target)
-  const field = get(fieldId)
-  field.value = text
-  entry.draft = null
+  const { action, drafts } = entry
+  if (planAssistant.busy || planAccept.disabled) return
+  const original = currentProject()[target] ?? ''
+  const { text, message } = planDraftResult(target, original, action, drafts[action])
+  if (!text || message) return
+  const replacing = action === 'replace'
+  const { saved, field } = savePlanNote(target, text, replacing)
+  if (replacing && !saved) {
+    planStatus.textContent = '브라우저에 저장하지 못했어요. 기존 메모와 수정안은 그대로 있어요.'
+    writingInputsChanged()
+    return
+  }
+  if (replacing) {
+    entry.lastReplacement = { before: original, after: text }
+  }
+  drafts[action] = null
   renderPlanDraft()
-  const saved = saveWorkspace()
   writingInputsChanged()
-  planStatus.textContent = saved ? '초안을 작품 메모에 추가했어요.' : '메모에 추가했지만 브라우저에 저장하지 못했어요.'
+  planStatus.textContent = replacing ? '기존 메모를 수정안으로 교체했어요.'
+    : saved ? '초안을 작품 메모에 추가했어요.' : '메모에 추가했지만 브라우저에 저장하지 못했어요.'
   planIdea.focus()
   field.setSelectionRange(text.length, text.length)
   field.scrollTop = field.scrollHeight
+})
+planUndoReplacement.addEventListener('click', () => {
+  const { target } = currentPlan()
+  const entry = currentPlanEntry()
+  const replacement = entry.lastReplacement
+  if (!replacement || planAssistant.busy || replacement.after !== (currentProject()[target] ?? '')) return
+  const { saved } = savePlanNote(target, replacement.before, true)
+  if (saved) {
+    entry.lastReplacement = null
+    planIdea.focus()
+  }
+  writingInputsChanged()
+  planStatus.textContent = saved ? '교체하기 전 메모를 복원했어요.' : '메모를 복원하지 못했어요. 브라우저 저장 상태를 확인해 주세요.'
 })
 systemPrompt.maxLength = systemPromptLimit
 bindField('system-prompt', value => {
@@ -944,33 +1169,59 @@ projectSelect.addEventListener('change', () => {
   renderWorkspace()
   saveWorkspace()
 })
+function openProjectTitle() {
+  projectTitle.value = currentProject().title
+  projectTitleDialog.showModal()
+  projectTitle.select()
+}
+get('edit-project-title').addEventListener('click', openProjectTitle)
+get('cancel-project-title').addEventListener('click', () => projectTitleDialog.close())
+get('project-title-form').addEventListener('submit', event => {
+  event.preventDefault()
+  currentProject().title = projectTitle.value
+  renderProjectSelect()
+  saveWorkspace()
+  writingInputsChanged()
+  projectTitleDialog.close()
+})
 get('add-project').addEventListener('click', () => {
   const project = makeProject()
   workspace.projects.push(project)
   workspace.activeProjectId = project.id
   renderWorkspace()
   saveWorkspace()
+  setNoteWorkspace(false)
   switchPanel('notes')
-  projectTitle.focus()
-  projectTitle.select()
+  openProjectTitle()
 })
-for (const button of document.querySelectorAll('[data-panel]')) {
+for (const button of toolButtons) {
   button.addEventListener('click', () => switchPanel(button.dataset.panel))
 }
-get('generate-panel').addEventListener('submit', event => {
+get('manuscript-composer').addEventListener('submit', event => {
   event.preventDefault()
   generateDraft()
 })
-stop.addEventListener('click', () => activeRequest?.controller.abort())
-discard.addEventListener('click', () => {
-  previews.delete(currentProject().id)
-  renderProposal()
+for (const view of [continuationProposal, revisionProposal]) {
+  view.stop.addEventListener('click', () => activeRequest?.controller.abort())
+}
+continuationProposal.discard.addEventListener('click', () => {
+  continuationPreviews.delete(currentProject().id)
+  renderContinuationProposal()
   manuscript.focus()
 })
-accept.addEventListener('click', () => {
+revisionProposal.discard.addEventListener('click', closeRevisionProposal)
+revisionProposal.section.addEventListener('cancel', event => {
+  event.preventDefault()
+  closeRevisionProposal()
+})
+continuationProposal.accept.addEventListener('click', () => {
+  acceptProposal(continuationProposal, continuationPreviews.get(currentProject().id))
+})
+revisionProposal.accept.addEventListener('click', () => acceptProposal(revisionProposal, revisionPreview))
+
+function acceptProposal(view, preview) {
   const project = currentProject()
-  const preview = previews.get(project.id)
-  if (!preview || activeRequest || accept.disabled) return
+  if (!preview || activeRequest || view.accept.disabled) return
   const text = normalizeLineEndings(preview.text.trim())
   const revision = preview.revision
   if (revision && project.manuscript.slice(revision.start, revision.end) !== revision.text) return
@@ -984,20 +1235,21 @@ accept.addEventListener('click', () => {
   }
   revisionSelection = undefined
   manuscript.value = project.manuscript
-  previews.delete(project.id)
-  renderProposal()
+  if (revision) closeRevisionProposal()
+  else continuationPreviews.delete(project.id)
+  renderContinuationProposal()
   updateCharacterCount()
   saveWorkspace()
   renderMemory()
   writingInputsChanged()
-  manuscript.focus()
   if (revision) goToPassage({ start: revision.start, end: revision.start + text.length, text })
   else {
+    manuscript.focus()
     manuscript.setSelectionRange(updated.length, updated.length)
     manuscript.scrollTop = manuscript.scrollHeight
     if (project.autoMemory) refreshProjectMemory(project)
   }
-})
+}
 function download(content, extension, type) {
   const title = projectName(currentProject()).replace(/[<>:"/\\|?*]/g, '_')
   const url = URL.createObjectURL(new Blob([content], { type }))
@@ -1009,12 +1261,14 @@ function download(content, extension, type) {
 }
 
 const filesDialog = get('files-dialog')
+const deleteProjectDialog = get('delete-project-dialog')
 const fileStatus = message => { get('files-status').textContent = message }
 const packOptions = () => ({ lorebook: get('pack-lore').checked, prompts: get('pack-prompts').checked })
 const downloadJson = (value, extension) => download(JSON.stringify(value, null, 2), extension, 'application/json;charset=utf-8')
 const packReview = get('pack-review')
 let pendingPack
 let filesSession = 0
+let pendingProjectDeletion
 
 function clearPackReview() {
   pendingPack = undefined
@@ -1040,13 +1294,57 @@ function downloadProjectBackup() {
 }
 get('download-backup').addEventListener('click', downloadProjectBackup)
 get('download-storage-backup').addEventListener('click', downloadProjectBackup)
+get('open-delete-project').addEventListener('click', () => {
+  pendingProjectDeletion = currentProject()
+  get('delete-project-message').textContent =
+    `‘${projectName(pendingProjectDeletion)}’의 원고, 메모, 로어북과 설정을 삭제해요. 복원하려면 삭제 전에 JSON으로 백업해 주세요.`
+  get('delete-project-status').hidden = true
+  deleteProjectDialog.showModal()
+})
+get('cancel-delete-project').addEventListener('click', () => deleteProjectDialog.close())
+deleteProjectDialog.addEventListener('close', () => {
+  if (!deleteProjectDialog.open) pendingProjectDeletion = undefined
+})
+get('delete-project-backup').addEventListener('click', () => {
+  if (pendingProjectDeletion === currentProject()) downloadProjectBackup()
+})
+get('delete-project-form').addEventListener('submit', event => {
+  event.preventDefault()
+  const project = pendingProjectDeletion
+  const status = get('delete-project-status')
+  if (project !== currentProject() || activeRequest || planAssistant.busy) {
+    status.textContent = '작품 상태가 바뀌었어요. 창을 닫고 다시 시도해 주세요.'
+    status.hidden = false
+    return
+  }
+
+  const previous = workspace.projects
+  const index = previous.indexOf(project)
+  const remaining = previous.filter(item => item !== project)
+  if (!remaining.length) remaining.push(makeProject())
+  workspace.projects = remaining
+  workspace.activeProjectId = remaining[Math.min(index, remaining.length - 1)].id
+  if (!saveWorkspace()) {
+    workspace.projects = previous
+    workspace.activeProjectId = project.id
+    status.textContent = storageWarning
+    status.hidden = false
+    return
+  }
+
+  memoryJobs.get(project)?.controller?.abort()
+  continuationPreviews.delete(project.id)
+  deleteProjectDialog.close()
+  renderWorkspace()
+  fileStatus(`‘${projectName(project)}’을 삭제했어요.`)
+})
 get('download-pack').addEventListener('click', () => {
   try { downloadJson(exportPack(currentProject(), packOptions()), 'relay-settings.json') }
   catch (error) { fileStatus(error.message) }
 })
 
 function checkImportProject(project) {
-  if (activeRequest || planAssistant.busy || project !== currentProject()) {
+  if (deleteProjectDialog.open || activeRequest || planAssistant.busy || project !== currentProject()) {
     throw new Error('작품 상태가 바뀌었어요. 다시 불러와 주세요.')
   }
 }

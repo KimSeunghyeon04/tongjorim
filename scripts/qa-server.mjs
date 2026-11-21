@@ -40,10 +40,10 @@ globalThis.fetch = async (url, options) => {
   }
   let text = { 'qa/write': '나래는 마지막 표를 접어 두었다.', 'qa/memory': '나래가 마지막 표를 접어 두었다.', 'qa/revise': '나래는 수정된 표를 손에 쥐었다.' }[body.model]
   if (body.model === 'qa/plan') {
-    const { card, mode, request } = JSON.parse(body.messages.at(-1).content)
+    const { card, mode, noteAction, request } = JSON.parse(body.messages.at(-1).content)
     const reply = mode === 'draft' ? '작품 설정을 토대로 초안을 만들었어요.' : `요청을 검토했어요. ${request}`
     const draft = card ? { ...card, name: card.name || '안개역', description: '안개가 내리는 밤에만 열리는 역.' }
-      : '나래는 마지막 표가 어디로 이어지는지 알아낸다.'
+      : noteAction === 'replace' ? '나래는 마지막 표의 행선지를 찾아 새벽 기차에 오른다.' : '나래는 마지막 표가 어디로 이어지는지 알아낸다.'
     text = JSON.stringify({ reply, draft: mode === 'draft' ? draft : null })
   }
   if (!text) return Response.json({ error: { message: 'Unexpected model' } }, { status: 400 })

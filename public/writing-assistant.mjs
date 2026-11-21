@@ -162,7 +162,7 @@ export function createWritingAssistant({ transcript, scrollport = transcript, st
       if (history.length > assistantHistoryTurns * 2) history.splice(0, 2)
       const answer = addMessage('assistant', response.reply)
       status.textContent = result.truncated ? '출력 한도에 도달했어요. 답변을 확인해 주세요.' : ''
-      onReply(response)
+      onReply({ ...response, truncated: result.truncated }, request)
       revealMessage(answer)
       return true
     } catch (error) {

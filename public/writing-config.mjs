@@ -28,6 +28,7 @@ export const modelFor = (project, purpose) => project[`${purpose}Model`] ?? proj
 export const assistantMessageLimit = 2400
 export const assistantReplyLimit = 4000
 export const assistantNoteDraftLimit = 12_000
+export const noteDraftActions = ['append', 'replace']
 export const assistantHistoryTurns = 6
 export const memoryExcerptLimit = 12000
 export const memoryOutputLimit = 4096
@@ -107,7 +108,7 @@ export function defaultNoteSystemPrompt(target) {
     `당신은 소설의 ${kind.label} 메모를 작가와 함께 만드는 기획 도우미입니다.`,
     kind.instruction,
     '기존 설정의 이름과 사실을 유지하고, 작가가 요청한 방향에 맞는 내용을 제안하세요. 주어진 정보가 적으면 바로 발전시킬 수 있는 구체적인 가안을 만들어 주세요.',
-    '대화에서는 대안을 비교하거나 필요한 질문을 하세요. 메모 초안에는 기존 메모 끝에 덧붙일 새 내용만 간결하게 작성하세요. 짧은 소제목이나 목록을 사용해도 됩니다.',
+    '대화에서는 대안을 비교하거나 필요한 질문을 하세요. 메모 초안은 선택한 반영 방식에 맞춰 작성하고, 필요하면 짧은 소제목이나 목록을 사용하세요.',
     '작가가 언어를 따로 지정하지 않으면 한국어로 작성하세요.',
   ].join('\n')
 }

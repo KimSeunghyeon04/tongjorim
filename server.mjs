@@ -7,7 +7,7 @@ import {
   assistantHistoryTurns, assistantMessageLimit, assistantNoteDraftLimit, assistantReplyLimit,
   completionPayload, defaultMemoryPrompt, defaultNoteSystemPrompt, defaultRevisionPrompt, defaultSystemPrompt,
   defaultReferences, effectiveSystemPrompt, freeModel, memoryExcerptLimit, memoryOutputLimit, modelIdPattern, validModelId,
-  noteKinds, orderedWritingContext, revisionParagraphLimit, systemPromptLimit,
+  noteDraftActions, noteKinds, orderedWritingContext, revisionParagraphLimit, systemPromptLimit,
   writingFields, writingTokenLimits,
 } from './public/writing-config.mjs'
 import { actualUsage } from './public/request-tools.mjs'
@@ -173,7 +173,7 @@ function writingCompletion({ model, maxTokens, draft, systemPrompt, references }
   return completionPayload(model, maxTokens, prompt, included)
 }
 
-function assistantCompletion({ kind, mode, model, maxTokens, target, messages, context, card, draft, systemPrompt }) {
+function assistantCompletion({ kind, mode, model, maxTokens, target, messages, context, card, draft, systemPrompt, noteAction = 'append' }) {
   const fields = ['projectTitle', ...Object.keys(noteKinds), 'manuscriptMemory']
   const notes = Object.fromEntries(fields.map(field => [field, context?.[field]]))
   notes.manuscriptMemory ??= ''
@@ -190,12 +190,14 @@ function assistantCompletion({ kind, mode, model, maxTokens, target, messages, c
   let instruction
   let draftFormat
   if (kind === 'note') {
-    if (typeof target !== 'string' || !Object.hasOwn(noteKinds, target) ||
+    if (typeof target !== 'string' || !Object.hasOwn(noteKinds, target) || !noteDraftActions.includes(noteAction) ||
         (draft !== null && (typeof draft !== 'string' || draft.length > assistantNoteDraftLimit))) {
       throw new RequestError(400, '메모 종류와 초안 내용을 확인해 주세요.')
     }
     instruction = resolveSystemPrompt(systemPrompt, defaultNoteSystemPrompt(target))
-    draftFormat = `메모에 덧붙일 완성된 초안 전체를 ${assistantNoteDraftLimit}자 이내 문자열로 작성하세요.`
+    draftFormat = noteAction === 'replace'
+      ? `notes[target]의 기존 메모 전체를 교체할 수 있는 수정본을 ${writingFields[target]}자 이내 문자열로 작성하세요. 변경 요청이 없는 부분은 보존하고 수정 요약 대신 최종 메모 전문을 넣으세요. 앞의 지시가 반영 형식과 충돌하면 이 형식을 따르세요.`
+      : `메모 끝에 덧붙일 새 내용만 ${assistantNoteDraftLimit}자 이내 문자열로 작성하세요.`
   } else {
     if (!validLoreCardFields(card, { allowIncomplete: true }) || (draft !== null && !validLoreCardFields(draft))) {
       throw new RequestError(400, '로어북 카드와 초안 내용을 확인해 주세요.')
@@ -220,6 +222,7 @@ function assistantCompletion({ kind, mode, model, maxTokens, target, messages, c
   ].join('\n')
   const conversation = messages.slice(0, -1).map(({ role, content }) => ({ role, content }))
   const content = JSON.stringify({ notes, mode, target: kind === 'note' ? target : undefined,
+    noteAction: kind === 'note' ? noteAction : undefined,
     card: kind === 'lore' ? loreCardFields(card) : undefined,
     draft: kind === 'lore' && draft ? loreCardFields(draft) : draft, request: messages.at(-1).content })
 
