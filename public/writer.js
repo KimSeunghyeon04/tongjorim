@@ -1290,7 +1290,7 @@ get('export-project').addEventListener('click', () => {
   download([projectName(project), project.manuscript].filter(Boolean).join('\n\n'), 'txt', 'text/plain;charset=utf-8')
 })
 function downloadProjectBackup() {
-  downloadJson(exportProject(currentProject()), 'relay.json')
+  downloadJson(exportProject(currentProject()), '통조림.json')
 }
 get('download-backup').addEventListener('click', downloadProjectBackup)
 get('download-storage-backup').addEventListener('click', downloadProjectBackup)
@@ -1339,7 +1339,7 @@ get('delete-project-form').addEventListener('submit', event => {
   fileStatus(`‘${projectName(project)}’을 삭제했어요.`)
 })
 get('download-pack').addEventListener('click', () => {
-  try { downloadJson(exportPack(currentProject(), packOptions()), 'relay-settings.json') }
+  try { downloadJson(exportPack(currentProject(), packOptions()), '통조림-설정.json') }
   catch (error) { fileStatus(error.message) }
 })
 

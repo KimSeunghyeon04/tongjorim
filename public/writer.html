@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8">
-  <title>Relay 집필실</title>
+  <title>통조림 집필실</title>
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/writer.css">
   <link rel="stylesheet" href="/writing-assistant.css">
@@ -13,13 +13,12 @@
 <body class="writer">
   <header class="topbar">
     <div class="brand">
-      <span class="brand-icon" aria-hidden="true"><i></i><i></i></span>
-      <span>Relay</span>
-      <span class="brand-caption">소설 집필실</span>
+      <span class="brand-mark" aria-hidden="true"><span class="brand-can"></span></span>
+      <span class="brand-name">통조림</span>
     </div>
     <div class="topbar-actions">
-      <a href="/settings" class="settings-link" data-open-settings aria-haspopup="dialog">설정</a>
-      <button class="outline-button" id="open-files" type="button">
+      <a href="/settings" class="outline-button topbar-quiet" data-open-settings aria-haspopup="dialog">설정</a>
+      <button class="outline-button" id="open-files" type="button" aria-haspopup="dialog" aria-controls="files-dialog">
         <span class="download-icon" aria-hidden="true"></span>작품 파일
       </button>
     </div>

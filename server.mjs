@@ -452,4 +452,4 @@ const server = createServer(async (req, res) => {
   }
 })
 
-server.listen(port, '127.0.0.1', () => console.log(`Relay is running at http://127.0.0.1:${port}`))
+server.listen(port, '127.0.0.1', () => console.log(`통조림 실행 중 http://127.0.0.1:${port}`))

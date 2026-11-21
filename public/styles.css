@@ -24,43 +24,51 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 h1, h2, p { margin: 0; }
 
 .topbar {
+  --topbar-line: #69779c;
+  --topbar-muted: #c5cdec;
   flex: none;
-  height: 70px;
+  height: 62px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 30px;
-  background: var(--paper);
-  border-bottom: 1px solid var(--line);
+  padding: 0 26px;
+  color: #f7f8ff;
+  background: #222842;
+  border-bottom: 1px solid #12172b;
 }
-.brand { display: flex; align-items: center; gap: 12px; font-size: 24px; font-weight: 750; letter-spacing: -.055em; }
-.brand-icon {
-  position: relative;
+.brand { display: flex; align-items: center; gap: 11px; }
+.brand-name { font-size: 22px; font-weight: 750; line-height: 1.15; letter-spacing: -.035em; }
+.brand-mark {
+  --brand-mark-fill: #e2e6ff;
   display: grid;
   place-items: center;
-  width: 33px;
-  aspect-ratio: 1;
-  border-radius: 10px;
-  background: var(--accent);
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  color: #35426d;
+  background: var(--brand-mark-fill);
 }
-.brand-icon i {
+.brand-can {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  border: 1px solid currentColor;
+  border-top: 0;
+  border-radius: 0 0 50% 50% / 0 0 24% 24%;
+}
+.brand-can::before, .brand-can::after {
+  content: "";
   position: absolute;
-  width: 33%;
-  aspect-ratio: 1;
-  border: 1.5px solid #fff;
-  border-radius: 3px;
-  transform: translate(-21%, 21%);
 }
-.brand-icon i + i { transform: translate(21%, -21%); }
-.brand-caption {
-  padding-left: 13px;
-  margin-left: 2px;
-  border-left: 1px solid var(--line);
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 500;
-  letter-spacing: -.025em;
+.brand-can::before {
+  inset: -2px -1px auto;
+  height: 7px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  background: var(--brand-mark-fill);
 }
+.brand-can::after { inset: 8px 0 4px; border-block: 1px solid currentColor; }
 .outline-button {
   display: inline-flex;
   align-items: center;
@@ -77,6 +85,15 @@ h1, h2, p { margin: 0; }
 .topbar-actions { display: flex; align-items: center; gap: 8px; }
 a.outline-button { color: inherit; text-decoration: none; }
 a.outline-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.topbar .outline-button {
+  min-height: 38px;
+  color: inherit;
+  background: #303955;
+  border-color: var(--topbar-line);
+}
+.topbar .topbar-quiet { color: var(--topbar-muted); background: transparent; border-color: transparent; }
+.topbar .outline-button:hover { color: inherit; background: #3b4669; border-color: #7482a7; }
+.topbar .outline-button:focus-visible { outline-color: var(--topbar-muted); }
 .icon-plus { position: relative; width: 12px; height: 12px; }
 .icon-plus::before, .icon-plus::after {
   content: "";
