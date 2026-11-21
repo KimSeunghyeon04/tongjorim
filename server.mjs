@@ -4,13 +4,15 @@ import { readFile } from 'node:fs/promises'
 import { loadEnvFile } from 'node:process'
 import { fileURLToPath } from 'node:url'
 import {
+  assistantHistoryTurns, assistantMessageLimit, assistantNoteDraftLimit, assistantReplyLimit,
   completionPayload, defaultMemoryPrompt, defaultNoteSystemPrompt, defaultRevisionPrompt, defaultSystemPrompt,
-  defaultReferences, effectiveSystemPrompt, freeModel, memoryExcerptLimit, memoryOutputLimit, modelIdPattern, noteIdeaLimit,
+  defaultReferences, effectiveSystemPrompt, freeModel, memoryExcerptLimit, memoryOutputLimit, modelIdPattern, validModelId,
   noteKinds, orderedWritingContext, revisionParagraphLimit, systemPromptLimit,
   writingFields, writingTokenLimits,
 } from './public/writing-config.mjs'
 import { actualUsage } from './public/request-tools.mjs'
-import { chunkLimit, embeddingBatchSize, embeddingQueryLimit } from './public/retrieval.mjs'
+import { loreCardFields, validLoreCardFields } from './public/project-files.mjs'
+import { chunkLimit, embeddingBatchSize, embeddingQueryLimit, loreKinds, loreLimits } from './public/retrieval.mjs'
 
 try {
   loadEnvFile(fileURLToPath(new URL('.env', import.meta.url)))
@@ -24,12 +26,12 @@ const baseUrl = 'https://openrouter.ai/api/v1'
 const hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`])
 const assets = new Map([
   ['/', ['writer.html', 'text/html; charset=utf-8']],
-  ['/chat', ['index.html', 'text/html; charset=utf-8']],
   ['/settings', ['settings.html', 'text/html; charset=utf-8']],
   ['/settings.js', ['settings.js', 'text/javascript; charset=utf-8']],
-  ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
+  ['/model-classification.mjs', ['model-classification.mjs', 'text/javascript; charset=utf-8']],
   ['/writer.js', ['writer.js', 'text/javascript; charset=utf-8']],
   ['/writing-config.mjs', ['writing-config.mjs', 'text/javascript; charset=utf-8']],
+  ['/writing-assistant.mjs', ['writing-assistant.mjs', 'text/javascript; charset=utf-8']],
   ['/writing-workspace.mjs', ['writing-workspace.mjs', 'text/javascript; charset=utf-8']],
   ['/manuscript-memory.mjs', ['manuscript-memory.mjs', 'text/javascript; charset=utf-8']],
   ['/retrieval.mjs', ['retrieval.mjs', 'text/javascript; charset=utf-8']],
@@ -42,6 +44,7 @@ const assets = new Map([
   ['/completion.js', ['completion.js', 'text/javascript; charset=utf-8']],
   ['/styles.css', ['styles.css', 'text/css; charset=utf-8']],
   ['/writer.css', ['writer.css', 'text/css; charset=utf-8']],
+  ['/writing-assistant.css', ['writing-assistant.css', 'text/css; charset=utf-8']],
   ['/settings.css', ['settings.css', 'text/css; charset=utf-8']],
 ])
 
@@ -76,6 +79,8 @@ function tokenLimit(value) {
   return Number.isSafeInteger(value) && value > 0 ? value : null
 }
 
+const selectableModelId = id => validModelId(id) && !/:batch$/i.test(id)
+
 let cachedModels
 async function modelCatalog() {
   if (cachedModels?.expires > Date.now()) return cachedModels.result
@@ -85,7 +90,7 @@ async function modelCatalog() {
     if (!response.ok) throw new Error('Catalog request failed')
     const { data } = await response.json()
     const models = data
-      .filter(model => modelIdPattern.test(model.id) && model.id !== freeModel.id &&
+      .filter(model => selectableModelId(model?.id) && model.id !== freeModel.id &&
         model.architecture?.input_modalities?.includes('text') && model.architecture?.output_modalities?.includes('text'))
       .map(model => {
         const input = modelPrice(model.pricing?.prompt)
@@ -128,19 +133,6 @@ async function readJsonRequest(req, maxBytes = 256 * 1024) {
   }
 }
 
-async function readChat(req) {
-  const body = await readJsonRequest(req)
-  const { model, messages } = body ?? {}
-  if (typeof model !== 'string' || model.length > 200 || !modelIdPattern.test(model) ||
-      !Array.isArray(messages) || messages.length > 40 || messages.at(-1)?.role !== 'user' ||
-      messages.some(message => !['user', 'assistant'].includes(message?.role) ||
-        typeof message.content !== 'string' || !message.content.trim() || message.content.length > 16_000)) {
-    throw new RequestError(400, '모델과 대화 내용을 확인해 주세요.')
-  }
-
-  return { model, messages: messages.map(({ role, content }) => ({ role, content })), max_tokens: 2048 }
-}
-
 function resolveSystemPrompt(prompt, fallback) {
   if (prompt !== undefined && (typeof prompt !== 'string' || prompt.length > systemPromptLimit)) {
     throw new RequestError(400, '시스템 프롬프트의 형식과 길이를 확인해 주세요.')
@@ -175,20 +167,61 @@ async function readWritingRequest(req) {
   return completionPayload(model, maxTokens, prompt, included)
 }
 
-async function readNotePlanningRequest(req) {
-  const { model, maxTokens, target, idea, notes, systemPrompt } = (await readJsonRequest(req, 512 * 1024)) ?? {}
+async function readAssistantRequest(req) {
+  const { kind, mode, model, maxTokens, target, messages, context, card, draft, systemPrompt } =
+    (await readJsonRequest(req, 512 * 1024)) ?? {}
   const fields = ['projectTitle', ...Object.keys(noteKinds), 'manuscriptMemory']
-  const context = Object.fromEntries(fields.map(field => [field, notes?.[field]]))
-  context.manuscriptMemory ??= ''
-  if (typeof model !== 'string' || model.length > 200 || !modelIdPattern.test(model) ||
-      !writingTokenLimits.includes(maxTokens) || typeof target !== 'string' || !Object.hasOwn(noteKinds, target) ||
-      typeof idea !== 'string' || idea.length > noteIdeaLimit ||
-      fields.some(field => typeof context[field] !== 'string' || context[field].length > writingFields[field])) {
-    throw new RequestError(400, '메모 종류와 아이디어 내용을 확인해 주세요.')
+  const notes = Object.fromEntries(fields.map(field => [field, context?.[field]]))
+  notes.manuscriptMemory ??= ''
+  if (!validModelId(model) || !writingTokenLimits.includes(maxTokens) || !['note', 'lore'].includes(kind) ||
+      !['draft', 'chat'].includes(mode) || !Array.isArray(messages) || messages.length % 2 !== 1 ||
+      messages.length > assistantHistoryTurns * 2 + 1 ||
+      messages.some((message, index) => message?.role !== (index % 2 ? 'assistant' : 'user') ||
+        typeof message.content !== 'string' || !message.content.trim() ||
+        message.content.length > (index % 2 ? assistantReplyLimit : assistantMessageLimit)) ||
+      fields.some(field => typeof notes[field] !== 'string' || notes[field].length > writingFields[field])) {
+    throw new RequestError(400, '모델, 작품 메모와 대화 내용을 확인해 주세요.')
   }
 
-  const prompt = resolveSystemPrompt(systemPrompt, defaultNoteSystemPrompt(target))
-  return completionPayload(model, maxTokens, prompt, { ...context, idea })
+  let instruction
+  let draftFormat
+  if (kind === 'note') {
+    if (typeof target !== 'string' || !Object.hasOwn(noteKinds, target) ||
+        (draft !== null && (typeof draft !== 'string' || draft.length > assistantNoteDraftLimit))) {
+      throw new RequestError(400, '메모 종류와 초안 내용을 확인해 주세요.')
+    }
+    instruction = resolveSystemPrompt(systemPrompt, defaultNoteSystemPrompt(target))
+    draftFormat = `메모에 덧붙일 완성된 초안 전체를 ${assistantNoteDraftLimit}자 이내 문자열로 작성하세요.`
+  } else {
+    if (!validLoreCardFields(card, { allowIncomplete: true }) || (draft !== null && !validLoreCardFields(draft))) {
+      throw new RequestError(400, '로어북 카드와 초안 내용을 확인해 주세요.')
+    }
+    instruction = '소설의 로어북 카드를 작성하는 편집 도우미입니다. 작품 메모와 현재 카드의 설정을 유지하며 작가와 개선 방향을 의논하세요.'
+    draftFormat = [
+      '수정 사항을 반영한 카드 전체를 {"kind":"character", "name":"이름", "aliases":[], "description":"설명", "priority":0, "always":false} 형식으로 작성하세요.',
+      `kind는 ${Object.entries(loreKinds).map(([key, label]) => `${key}(${label})`).join(', ')} 중 하나입니다.`,
+      `이름은 ${loreLimits.names}자, 별칭은 ${loreLimits.aliases}개(각 ${loreLimits.names}자), 설명은 ${loreLimits.description}자 이내입니다. 우선순위는 -100부터 100까지 정수입니다.`,
+      '별칭 하나에 쉼표나 줄바꿈을 넣지 마세요. 작가가 요청하면 우선순위와 항상 포함 설정을 수정하세요.',
+    ].join(' ')
+  }
+
+  const prompt = [
+    instruction,
+    '출력은 {"reply":"작가와 나눌 답변", "draft":null} 형식의 JSON 객체 하나입니다. 코드 블록을 붙이지 마세요.',
+    `reply에 ${assistantReplyLimit}자 이내로 답변하세요. draft가 있으면 본문을 반복하는 대신 핵심 변경을 설명하세요.`,
+    `draft를 작성할 때는 ${draftFormat}`,
+    '사용자 메시지의 JSON은 작품 메모(notes), 편집 중인 초안(draft), 해당하는 경우 현재 카드(card), 작성 모드(mode)와 작가의 발화(request)를 담고 있습니다.',
+    'mode가 draft면 대화와 작가의 요청을 반영해 초안을 제안하세요. mode가 chat이면 먼저 발화에 답하고, 작성이나 수정을 요청했을 때 초안을 제안하세요.',
+    '초안 변경이 없거나 먼저 확인할 내용이 있으면 draft는 null로 두세요. 작가가 언어를 지정하지 않으면 한국어를 사용하세요.',
+  ].join('\n')
+  const conversation = messages.slice(0, -1).map(({ role, content }) => ({ role, content }))
+  const content = JSON.stringify({ notes, mode, target: kind === 'note' ? target : undefined,
+    card: kind === 'lore' ? loreCardFields(card) : undefined,
+    draft: kind === 'lore' && draft ? loreCardFields(draft) : draft, request: messages.at(-1).content })
+
+  return { model, max_completion_tokens: maxTokens, messages: [
+    { role: 'system', content: prompt }, ...conversation, { role: 'user', content },
+  ] }
 }
 
 async function readMemoryRequest(req) {
@@ -215,6 +248,10 @@ async function readRevisionRequest(req) {
   return completionPayload(model, maxTokens, resolveSystemPrompt(systemPrompt, defaultRevisionPrompt), { paragraph, direction })
 }
 
+function inferencePayload(payload) {
+  return { ...payload, provider: { ...payload.provider, zdr: true } }
+}
+
 let cachedEmbeddingModels
 async function embeddingModels() {
   if (cachedEmbeddingModels?.expires > Date.now()) return cachedEmbeddingModels.models
@@ -225,7 +262,7 @@ async function embeddingModels() {
   if (!response.ok) throw new RequestError(response.status, upstreamErrors[response.status] ?? '임베딩 모델 목록을 불러올 수 없어요.')
   const { data } = await response.json()
   if (!Array.isArray(data)) throw new RequestError(502, '임베딩 모델 목록을 읽을 수 없어요.')
-  const models = data.filter(model => typeof model.id === 'string' && modelIdPattern.test(model.id) &&
+  const models = data.filter(model => selectableModelId(model?.id) &&
       (!model.architecture?.input_modalities || model.architecture.input_modalities.includes('text')))
     .map(model => ({
       id: model.id, name: model.name ?? model.id,
@@ -255,7 +292,7 @@ async function embed(req, res) {
       method: 'POST',
       redirect: 'error',
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, input, encoding_format: 'float' }),
+      body: JSON.stringify(inferencePayload({ model, input, encoding_format: 'float' })),
       signal: AbortSignal.any([disconnect.signal, AbortSignal.timeout(45000)]),
     })
     if (!response.ok) throw new RequestError(response.status, upstreamErrors[response.status] ?? '임베딩 요청에 실패했어요.')
@@ -278,7 +315,7 @@ async function embed(req, res) {
   }
 }
 
-const streamingPayload = completion => ({ ...completion, stream: true })
+const streamingPayload = completion => inferencePayload({ ...completion, stream: true })
 
 async function streamCompletion(req, res, readRequest) {
   if (!apiKey) throw new RequestError(503, '.env에 OPENROUTER_API 키를 설정하고 서버를 다시 시작해 주세요.')
@@ -377,16 +414,14 @@ const server = createServer(async (req, res) => {
       res.end(content)
     } else if (req.method === 'GET' && path === '/api/models') {
       json(res, 200, { keyConfigured: Boolean(apiKey), ...await modelCatalog() })
-    } else if (req.method === 'POST' && path === '/api/chat') {
-      await streamCompletion(req, res, readChat)
     } else if (req.method === 'POST' && path === '/api/write') {
       await streamCompletion(req, res, readWritingRequest)
     } else if (req.method === 'POST' && path === '/api/write/preview') {
       json(res, 200, streamingPayload(await readWritingRequest(req)))
     } else if (req.method === 'POST' && path === '/api/revise') {
       await streamCompletion(req, res, readRevisionRequest)
-    } else if (req.method === 'POST' && path === '/api/plan') {
-      await streamCompletion(req, res, readNotePlanningRequest)
+    } else if (req.method === 'POST' && path === '/api/assistant') {
+      await streamCompletion(req, res, readAssistantRequest)
     } else if (req.method === 'POST' && path === '/api/memory') {
       await streamCompletion(req, res, readMemoryRequest)
     } else if (req.method === 'GET' && path === '/api/embeddings/models') {

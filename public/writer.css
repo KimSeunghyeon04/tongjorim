@@ -10,7 +10,7 @@
 .writer .topbar { padding-inline: 26px; }
 .writer .brand { letter-spacing: -.04em; }
 .writer .outline-button { min-height: 38px; }
-.chat-link {
+.settings-link {
   display: inline-flex;
   align-items: center;
   min-height: 38px;
@@ -21,8 +21,8 @@
   font-weight: 650;
   border-radius: 7px;
 }
-.chat-link:hover { color: var(--accent); background: var(--tint); }
-.chat-link:focus-visible, .proposal-body:focus-visible, .writing-field:focus-visible {
+.settings-link:hover { color: var(--accent); background: var(--tint); }
+.settings-link:focus-visible, .proposal-body:focus-visible, .writing-field:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -153,6 +153,9 @@
 .tools-jump { display: none; text-decoration: none; }
 .tools-jump:focus-visible { outline: 2px solid var(--accent); }
 .storage-error {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
   margin: 0 0 10px;
   padding: 9px 12px;
   border: 1px solid #e7d3ab;
@@ -259,6 +262,9 @@
 .generation-actions { display: grid; gap: 8px; margin-top: 2px; }
 .writing-input textarea + label { margin-top: 12px; }
 .compact-actions, .file-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.preview-semantic-action { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.pack-review { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--tint); }
+.pack-review h4 { margin: 0; font-size: 14px; }
 .reference-list, .lore-list, .evidence-list { list-style: none; margin: 0; padding: 0; }
 .reference-list { padding: 0 11px 7px; }
 .reference-list li { display: flex; align-items: center; min-height: 35px; gap: 3px; border-top: 1px solid var(--line); }
@@ -266,8 +272,21 @@
 .reference-list button { width: 28px; min-height: 30px; padding: 0; }
 .lore-section { display: grid; gap: 8px; min-width: 0; }
 .lore-section h2 { font-size: 14px; }
+.lore-list-feedback { display: grid; justify-items: start; gap: 5px; }
 .lore-list li { padding: 5px 0 7px; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
 .lore-list strong { font-size: 13px; }
+.lore-editor-actions { margin: 0 11px; padding-bottom: 10px; }
+.lore-delete-dialog { padding: 16px; gap: 9px; }
+.lore-delete-dialog .compact-actions { justify-content: flex-end; }
+.lore-assistant { display: grid; gap: 8px; margin: 0 11px; padding: 12px 0; border-top: 1px solid var(--line); min-width: 0; }
+.lore-assistant h3, .lore-assistant h4 { margin: 0; font-size: 13px; }
+.lore-assistant h3:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.lore-assistant .assistant-composer { display: grid; gap: 6px; }
+.lore-assistant textarea.writing-field { min-height: 62px; }
+.lore-assistant .assistant-draft { padding: 8px 0; border-block: 1px solid var(--line); }
+.lore-draft-fields { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 8px; margin: 7px 0 9px; font-size: 12px; line-height: 1.55; }
+.lore-draft-fields dt { color: var(--muted); }
+.lore-draft-fields dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .request-preview { background: var(--paper); border-color: var(--line); }
 .request-preview-data { display: grid; gap: 13px; min-width: 0; }
 .request-preview-data h3, .file-section h3 { font-size: 13px; margin-bottom: 3px; }
@@ -291,10 +310,8 @@
 .note-planner summary:hover { background: var(--tint); border-radius: 7px; }
 .note-planner summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 7px; }
 .note-planner-form { display: grid; gap: 12px; margin: 0 11px; padding: 12px 0; border-top: 1px solid var(--line); }
-.note-planner .optional-label { color: var(--muted); font-size: 12px; font-weight: 500; }
 .note-draft { display: grid; gap: 8px; padding: 12px 11px; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
 .note-draft h3 { margin: 0; font-size: 14px; }
-.note-draft h3:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .note-draft-actions { display: flex; justify-content: end; align-items: center; flex-wrap: wrap; gap: 6px; }
 .legacy-notes-list { display: grid; gap: 12px; margin: 0 11px; padding: 12px 0; border-top: 1px solid var(--line); list-style: none; overflow-wrap: anywhere; }
 .legacy-notes-list strong { font-size: 13px; }

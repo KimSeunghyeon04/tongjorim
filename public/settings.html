@@ -17,7 +17,6 @@
     </div>
     <nav class="topbar-actions" aria-label="작업 공간">
       <a class="outline-button" href="/">집필실</a>
-      <a class="outline-button" href="/chat">채팅</a>
     </nav>
   </header>
 
@@ -58,8 +57,11 @@
         </button>
       </div>
       <div class="settings-row">
-        <h3 id="plan-model-label">메모 작성 도우미 모델</h3>
-        <button class="selected-model" type="button" data-model="planModel" aria-labelledby="plan-model-label plan-model-value" aria-haspopup="dialog" disabled>
+        <div>
+          <h3 id="plan-model-label">작성 도우미 모델</h3>
+          <p id="plan-model-hint">메모와 로어북 카드 작성에 사용해요.</p>
+        </div>
+        <button class="selected-model" type="button" data-model="planModel" aria-labelledby="plan-model-label plan-model-value" aria-describedby="plan-model-hint" aria-haspopup="dialog" disabled>
           <span class="model-label"><strong id="plan-model-value"></strong><span></span></span><span class="chevron" aria-hidden="true"></span>
         </button>
       </div>
@@ -75,24 +77,9 @@
       <div class="settings-row">
         <div>
           <label for="generation-limit">생성 한도</label>
-          <p id="generation-limit-hint">이어쓰기, 퇴고, 메모 작성 도우미의 최대 출력 토큰 수예요.</p>
+          <p id="generation-limit-hint">이어쓰기, 퇴고, 작성 도우미의 최대 출력 토큰 수예요.</p>
         </div>
         <select id="generation-limit" class="settings-select" aria-describedby="generation-limit-hint" disabled></select>
-      </div>
-    </section>
-
-    <section class="settings-section" id="chat-settings" aria-labelledby="chat-section-title">
-      <header class="settings-section-heading">
-        <div>
-          <h2 id="chat-section-title">채팅</h2>
-          <p>이 브라우저의 모든 채팅에 적용돼요.</p>
-        </div>
-      </header>
-      <div class="settings-row">
-        <h3 id="chat-model-label">채팅 응답 모델</h3>
-        <button class="selected-model" type="button" data-model="chat" aria-labelledby="chat-model-label chat-model-value" aria-haspopup="dialog" disabled>
-          <span class="model-label"><strong id="chat-model-value"></strong><span></span></span><span class="chevron" aria-hidden="true"></span>
-        </button>
       </div>
     </section>
   </main>
@@ -105,8 +92,18 @@
     <div class="model-query">
       <label class="visually-hidden" for="model-search">모델 검색</label>
       <input id="model-search" type="search" placeholder="모델 이름 또는 ID 검색" autocomplete="off" autofocus>
+      <div class="model-classification">
+        <label for="model-publisher">
+          제공사
+          <select id="model-publisher" class="settings-select"></select>
+        </label>
+        <label for="model-generation">
+          세대
+          <select id="model-generation" class="settings-select"></select>
+        </label>
+      </div>
       <div class="filters" id="model-filters" role="group" aria-label="가격 필터">
-        <button type="button" data-free="false" aria-pressed="true">전체</button>
+        <button type="button" data-free="false" aria-pressed="true">모든 가격</button>
         <button type="button" data-free="true" aria-pressed="false">무료</button>
       </div>
     </div>

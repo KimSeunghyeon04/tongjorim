@@ -1,18 +1,5 @@
-import { freeModel, validModelId } from './writing-config.mjs'
-
-export { freeModel }
-export const chatModelKey = 'relay.chat.model'
+export { freeModel } from './writing-config.mjs'
 export const settingsChangeEvent = 'relay:settings-change'
-
-export function savedChatModel() {
-  try {
-    const value = localStorage.getItem(chatModelKey)
-    if (validModelId(value)) return value
-  } catch {
-    // A browser without storage can still use the default chat model.
-  }
-  return freeModel.id
-}
 
 const usdFormat = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumSignificantDigits: 4 })
 

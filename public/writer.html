@@ -7,6 +7,7 @@
   <title>Relay 집필실</title>
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/writer.css">
+  <link rel="stylesheet" href="/writing-assistant.css">
   <link rel="stylesheet" href="/settings.css">
   <script type="module" src="/writer.js"></script>
   <script type="module" src="/settings.js"></script>
@@ -19,8 +20,7 @@
       <span class="brand-caption">소설 집필실</span>
     </div>
     <div class="topbar-actions">
-      <a href="/chat" class="chat-link">채팅</a>
-      <a href="/settings" class="chat-link" data-open-settings aria-haspopup="dialog">설정</a>
+      <a href="/settings" class="settings-link" data-open-settings aria-haspopup="dialog">설정</a>
       <button class="outline-button" id="open-files" type="button">
         <span class="download-icon" aria-hidden="true"></span>작품 파일
       </button>
@@ -53,7 +53,11 @@
             <a href="#writing-tools" class="quiet-button tools-jump">집필 도구</a>
           </div>
         </div>
-        <p id="storage-error" class="storage-error" role="alert" hidden></p>
+        <div id="storage-error" class="storage-error" hidden>
+          <p id="storage-error-message" role="alert"></p>
+          <p>새로고침하거나 닫기 전에 원고와 메모, 설정을 JSON으로 백업해 주세요. ‘작품 파일’의 ‘새 작품으로 복원’에서 백업을 열 수 있어요.</p>
+          <button type="button" class="outline-button" id="download-storage-backup">현재 작품 JSON 백업</button>
+        </div>
         <div class="paper">
           <div class="paper-label"><label for="manuscript">원고</label><span id="character-count"></span></div>
           <textarea id="manuscript" class="manuscript" placeholder="첫 문장을 쓰거나, 이어쓰기 지시로 소설을 시작하세요." rows="8" spellcheck="false"></textarea>
@@ -85,6 +89,10 @@
             <button class="quiet-button" type="button" id="close-request-preview">닫기</button>
           </div>
           <p class="proposal-status" id="request-preview-status" role="status"></p>
+          <div class="preview-semantic-action" id="preview-semantic-action" hidden>
+            <p class="field-hint" id="preview-semantic-cost">현재 키워드 검색 결과를 표시하고 있어요. 의미 검색을 반영하면 과거 문단과 검색어를 OpenRouter에 보내며 임베딩 비용이 들 수 있어요.</p>
+            <button class="outline-button" id="preview-semantic-search" type="button" aria-describedby="preview-semantic-cost">의미 검색 반영</button>
+          </div>
           <div class="request-preview-data" id="request-preview-data" hidden>
             <p class="field-hint" id="request-preview-estimate"></p>
             <div id="request-blocks" class="request-blocks"></div>
@@ -211,21 +219,26 @@
               </div>
               <select class="writing-field" id="plan-target"></select>
             </div>
+            <ol class="assistant-transcript" id="plan-transcript" aria-label="메모 작성 대화" tabindex="0" hidden></ol>
             <div class="writing-input">
-              <label for="plan-idea">아이디어나 요청 <span class="optional-label">(선택)</span></label>
-              <textarea class="writing-field" id="plan-idea" rows="4"></textarea>
+              <label for="plan-idea">아이디어나 요청</label>
+              <textarea class="writing-field" id="plan-idea" rows="3" aria-describedby="plan-context plan-context-limit"></textarea>
             </div>
-            <div class="generation-actions">
-              <button class="writing-primary" id="plan-generate" type="submit">초안 만들기</button>
-              <p class="field-hint">작품 메모와 요청을 OpenRouter에 보내 초안을 만들어요.</p>
+            <p class="field-hint" id="plan-context-limit" role="status" hidden></p>
+            <div class="compact-actions">
+              <button type="button" class="quiet-button" id="plan-reset" disabled>새 대화</button>
+              <button type="button" class="outline-button" id="plan-generate" aria-describedby="plan-context-limit">초안 만들기</button>
+              <button type="submit" class="writing-primary" id="plan-send" aria-describedby="plan-context-limit" disabled>보내기</button>
+              <button type="button" class="outline-button" id="plan-stop" hidden>응답 중지</button>
             </div>
+            <p class="field-hint assistant-status" id="plan-status" role="status"></p>
+            <p class="field-hint" id="plan-context">작품 메모와 대화, 편집 중인 초안을 OpenRouter에 보내요.</p>
           </form>
           <section class="note-draft" id="note-draft" aria-labelledby="note-draft-title" hidden>
-            <h3 id="note-draft-title" tabindex="-1"></h3>
-            <p class="field-hint" id="note-draft-status" role="status"></p>
-            <textarea class="writing-field" id="note-draft-text" rows="7" aria-labelledby="note-draft-title" hidden></textarea>
+            <h3 id="note-draft-title"></h3>
+            <textarea class="writing-field" id="note-draft-text" rows="6" aria-labelledby="note-draft-title"></textarea>
+            <p class="field-hint" id="note-draft-status" role="status" hidden></p>
             <div class="note-draft-actions">
-              <button type="button" class="outline-button" id="plan-stop" hidden>생성 중지</button>
               <button type="button" class="quiet-button" id="plan-discard">초안 버리기</button>
               <button type="button" class="writing-primary" id="plan-accept">메모에 추가</button>
             </div>
@@ -297,15 +310,23 @@
             <label class="memory-auto"><input id="semantic-enabled" type="checkbox" aria-describedby="embedding-consent"> 의미 검색 켜기</label>
             <p class="field-hint" id="embedding-estimate"></p>
             <p class="field-hint" id="embedding-usage"></p>
-            <button class="outline-button" id="retry-search" type="button">다시 검색</button>
+            <button class="outline-button" id="retry-search" type="button" aria-describedby="embedding-consent">다시 검색</button>
           </div>
         </details>
         <section class="lore-section" aria-labelledby="lore-title">
           <h2 id="lore-title">로어북</h2>
           <p class="field-hint" id="lore-empty">추가한 카드가 없어요.</p>
+          <div class="lore-list-feedback" id="lore-list-feedback" hidden>
+            <p class="field-hint" id="lore-list-status" role="status"></p>
+            <button type="button" id="lore-undo-delete" class="outline-button" hidden>삭제 실행 취소</button>
+          </div>
           <ul class="lore-list" id="lore-list"></ul>
           <details class="note-planner" id="lore-editor">
             <summary>카드 작성</summary>
+            <div class="compact-actions lore-editor-actions">
+              <button type="button" id="lore-new-card" class="quiet-button" hidden>새 카드 작성</button>
+              <button type="button" id="lore-open-assistant" class="outline-button" aria-controls="lore-assistant">AI 카드 도우미로 이동</button>
+            </div>
             <form class="note-planner-form" id="lore-form">
               <div class="writing-input">
                 <label for="lore-kind">종류</label>
@@ -331,10 +352,42 @@
               <p class="field-hint" id="lore-form-status" role="status"></p>
               <div class="memory-buttons">
                 <button type="submit" id="save-lore" class="writing-primary">카드 추가</button>
-                <button type="button" id="lore-cancel" class="quiet-button" hidden>취소</button>
+                <button type="button" id="lore-cancel" class="quiet-button" hidden>편집 취소</button>
               </div>
             </form>
+            <section id="lore-assistant" class="writing-assistant lore-assistant" aria-labelledby="lore-assistant-title">
+              <h3 id="lore-assistant-title" tabindex="-1">AI 카드 도우미</h3>
+              <p class="field-hint">현재 카드와 작품 메모를 참고해요.</p>
+              <p class="field-hint" id="lore-notes-limit" hidden></p>
+              <ol class="assistant-transcript" id="lore-assistant-transcript" aria-label="로어북 카드 작성 대화" hidden></ol>
+              <p class="field-hint assistant-status" id="lore-assistant-status" role="status"></p>
+              <section class="assistant-draft" id="lore-card-draft" aria-labelledby="lore-draft-title" hidden>
+                <h4 id="lore-draft-title">카드 초안</h4>
+                <dl class="lore-draft-fields" id="lore-draft-fields"></dl>
+                <button type="button" id="lore-draft-apply" class="outline-button">카드에 반영</button>
+              </section>
+              <form class="assistant-composer" id="lore-assistant-form">
+                <div class="writing-input">
+                  <label for="lore-assistant-prompt">AI에게 요청</label>
+                  <textarea class="writing-field" id="lore-assistant-prompt" rows="2" placeholder="이 카드의 보완할 점을 알려줘" aria-describedby="lore-notes-limit"></textarea>
+                </div>
+                <div class="compact-actions">
+                  <button type="submit" id="lore-send" class="writing-primary" disabled>보내기</button>
+                  <button type="button" id="lore-draft-start" class="outline-button">카드 초안 만들기</button>
+                  <button type="button" id="lore-assistant-stop" class="quiet-button" hidden>중지</button>
+                  <button type="button" id="lore-assistant-reset" class="quiet-button" hidden>대화 초기화</button>
+                </div>
+              </form>
+            </section>
           </details>
+          <dialog id="lore-delete-dialog" class="lore-delete-dialog" aria-labelledby="lore-delete-title" aria-describedby="lore-delete-message">
+            <h2 id="lore-delete-title">로어북 카드 삭제</h2>
+            <p id="lore-delete-message"></p>
+            <form method="dialog" class="compact-actions">
+              <button class="quiet-button" type="submit" value="cancel" autofocus>취소</button>
+              <button class="writing-primary" type="submit" value="delete">카드 삭제</button>
+            </form>
+          </dialog>
         </section>
       </div>
     </aside>
@@ -365,6 +418,14 @@
         <button class="outline-button" id="import-pack" type="button">설정 가져오기</button>
       </div>
       <input id="import-pack-file" type="file" accept=".json,application/json" hidden>
+      <section class="pack-review" id="pack-review" aria-labelledby="pack-review-title" hidden>
+        <h4 id="pack-review-title" tabindex="-1" aria-describedby="pack-review-details">교체할 설정 확인</h4>
+        <p class="field-hint" id="pack-review-details"></p>
+        <div class="file-actions">
+          <button class="quiet-button" id="cancel-pack-import" type="button">취소</button>
+          <button class="writing-primary" id="apply-pack-import" type="button" aria-describedby="pack-review-details">설정 교체</button>
+        </div>
+      </section>
     </section>
     <p class="field-hint" id="files-status" role="status"></p>
   </dialog>

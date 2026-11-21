@@ -1,9 +1,10 @@
 import { freeModel, requestCompletion, settingsChangeEvent } from './completion.js'
 import {
   appendParagraphs, completionPayload, defaultMemoryPrompt, defaultNoteSystemPrompt, defaultRevisionPrompt, defaultSystemPrompt,
-  effectiveSystemPrompt, memoryOutputLimit, modelFor, normalizeLineEndings, noteIdeaLimit, noteKinds, projectNotesForRequest, referenceLabels,
+  effectiveSystemPrompt, memoryOutputLimit, modelFor, normalizeLineEndings, noteKinds, projectNotesForRequest, referenceLabels,
   systemPromptLimit, writingFields,
 } from './writing-config.mjs'
+import { assistantMessageLimit, assistantNoteDraftLimit, createWritingAssistant, projectNotesLimitHint } from './writing-assistant.mjs'
 import { memoryForPrompt, memoryReadThrough, memoryRequest, setManuscriptText, updateManuscriptMemory } from './manuscript-memory.mjs'
 import { exportPack, exportProject, readPack, readProject } from './project-files.mjs'
 import { currentProjectOf, makeProject, mergeModelSettings, projectName, readWorkspace, storageKey } from './writing-workspace.mjs'
@@ -34,6 +35,10 @@ const notePlanner = get('note-planner')
 const planTarget = get('plan-target')
 const planIdea = get('plan-idea')
 const planGenerate = get('plan-generate')
+const planSend = get('plan-send')
+const planStop = get('plan-stop')
+const planReset = get('plan-reset')
+const planTranscript = get('plan-transcript')
 const planDraftText = get('note-draft-text')
 const planAccept = get('plan-accept')
 const memoryPanel = get('manuscript-memory')
@@ -49,12 +54,13 @@ const plans = new WeakMap()
 const memoryJobs = new WeakMap()
 let models = [freeModel]
 let activeRequest
-let activePlanRequest
 let activePreview
+let previewOrigin
 let revisionSelection
 let savedVersion
 let storageReadable = true
 let storageWarning = ''
+const storageConflictMessage = '다른 탭에서 작품이 바뀌어 이 탭의 변경을 저장할 수 없어요.'
 
 function loadWorkspace() {
   try {
@@ -62,7 +68,7 @@ function loadWorkspace() {
     return readWorkspace(savedVersion)
   } catch {
     storageReadable = false
-    storageWarning = '저장된 작업 공간을 열 수 없어요. 이 창에서 편집한 원고는 TXT로 내보낼 수 있어요.'
+    storageWarning = '저장된 작업 공간을 열 수 없어요.'
     const project = makeProject()
     return { activeProjectId: project.id, projects: [project] }
   }
@@ -70,11 +76,21 @@ function loadWorkspace() {
 
 const workspace = loadWorkspace()
 const currentProject = () => currentProjectOf(workspace)
+const planAssistant = createWritingAssistant({
+  transcript: planTranscript,
+  status: get('plan-status'),
+  onChange: syncControls,
+  onReply({ draft }) {
+    if (draft === null) return
+    currentPlanEntry().draft = draft
+    renderPlanDraft()
+  },
+})
 
 function showStorageStatus() {
-  const error = get('storage-error')
-  if (error.textContent !== storageWarning) error.textContent = storageWarning
-  error.hidden = !storageWarning
+  get('storage-error').hidden = !storageWarning
+  const message = get('storage-error-message')
+  if (message.textContent !== storageWarning) message.textContent = storageWarning
   const label = storageWarning ? '브라우저 저장 안 됨' : '브라우저에 저장됨'
   if (get('save-status').textContent !== label) get('save-status').textContent = label
 }
@@ -99,7 +115,7 @@ function saveWorkspace() {
   if (storageReadable) {
     try {
       if (!syncSavedWorkspace(localStorage.getItem(storageKey))) {
-        storageWarning = '다른 탭에서 작품이 바뀌었어요. 이 탭에서 수정한 내용을 TXT로 내보낸 뒤 새로고침해 주세요.'
+        storageWarning = storageConflictMessage
       } else {
         const nextVersion = JSON.stringify(workspace)
         localStorage.setItem(storageKey, nextVersion)
@@ -107,7 +123,7 @@ function saveWorkspace() {
         storageWarning = ''
       }
     } catch {
-      storageWarning = '브라우저에 저장할 수 없어요. 창을 닫기 전에 TXT로 내보내 주세요.'
+      storageWarning = '브라우저에 저장할 수 없어요.'
     }
   }
   showStorageStatus()
@@ -180,12 +196,14 @@ function renderWorkspace() {
 }
 
 function syncControls() {
-  const busy = Boolean(activeRequest || activePlanRequest)
+  const busy = Boolean(activeRequest || planAssistant.busy)
   for (const element of [generate, projectSelect, get('add-project'), get('open-files')]) {
     element.disabled = busy
   }
-  get('preview-request').disabled = busy || Boolean(activePreview)
-  generate.textContent = activeRequest && !previews.get(currentProject().id)?.revision ? '생성 중…' : '이어서 쓰기'
+  for (const id of ['preview-request', 'preview-semantic-search', 'retry-search']) {
+    get(id).disabled = busy || Boolean(activePreview)
+  }
+  generate.textContent = activeRequest && !activeRequest.preview.revision ? '생성 중…' : '이어서 쓰기'
   get('generate-revision').disabled = busy || !selectedRevision()
   updatePlanControls()
 }
@@ -211,7 +229,16 @@ function updateProposalActions() {
   const preview = previews.get(project.id)
   if (!preview) return
   const changed = project.manuscript !== preview.original
-  get('proposal-status').textContent = changed ? '생성 요청 후 원고가 바뀌었어요. 다시 요청해 주세요.' : preview.status
+  const pending = activeRequest?.preview
+  let status = preview.retryStatus ?? preview.status
+  if (pending && pending !== preview) {
+    status = `${pending.status} 아래는 이전 초안이에요.`
+  } else if (changed) {
+    const stale = '생성 요청 후 원고가 바뀌었어요. 다시 요청해 주세요.'
+    status = preview.retryStatus ? `${status} ${stale}` : stale
+  }
+  const feedback = get('proposal-status')
+  if (feedback.textContent !== status) feedback.textContent = status
   accept.textContent = preview.revision ? '이 문단 교체' : '원고에 추가'
   accept.hidden = Boolean(activeRequest)
   accept.disabled = changed || !preview.text.trim() || (Boolean(preview.revision) && !preview.complete)
@@ -307,6 +334,7 @@ function renderEstimates() {
 function closeRequestPreview() {
   activePreview?.abort()
   activePreview = undefined
+  previewOrigin = undefined
   get('request-preview').hidden = true
 }
 
@@ -343,20 +371,26 @@ const sourcePanel = setupSourcePanel({
   onSearch: renderEstimates, goToPassage,
 })
 
-async function showRequestPreview() {
-  if (activePreview || activeRequest || activePlanRequest) return
+async function showRequestPreview({ refreshSemantic = false, origin } = {}) {
+  if (activePreview || activeRequest || planAssistant.busy) return
+  if (origin) previewOrigin = origin
   const project = currentProject()
   const controller = new AbortController()
   activePreview = controller
   syncControls()
   const status = get('request-preview-status')
   const data = get('request-preview-data')
+  const semanticAction = get('preview-semantic-action')
   get('request-preview').hidden = false
   data.hidden = true
-  status.textContent = '전송할 내용을 준비하는 중이에요.'
+  semanticAction.hidden = true
+  status.textContent = refreshSemantic ? '참고 원문을 다시 찾는 중이에요.' : '미리보기를 준비하는 중이에요.'
   get('request-preview-title').focus()
   try {
-    const prepared = await research.prepare(project, catalogModel(project.model), controller.signal)
+    const model = catalogModel(project.model)
+    const prepared = refreshSemantic
+      ? await research.prepare(project, model, controller.signal, { retry: true })
+      : research.preview(project, model)
     const payload = await jsonRequest('/api/write/preview', { body: prepared.body, signal: controller.signal })
     controller.signal.throwIfAborted()
     const blocks = [
@@ -377,9 +411,10 @@ async function showRequestPreview() {
     research.renderResults(prepared)
     const value = estimate(payload)
     get('request-preview-estimate').textContent = value
-    get('writing-estimate').textContent = value
+    get('writing-estimate').textContent = value + (prepared.semanticPending ? ' · 의미 검색 반영 전' : '')
     get('request-json').textContent = JSON.stringify(payload, null, 2)
     status.textContent = `OpenRouter에 보낼 순서 · ${payload.model}`
+    semanticAction.hidden = !(prepared.semanticPending || prepared.semanticFailed)
     data.hidden = false
   } catch (error) {
     if (!controller.signal.aborted) status.textContent = completionFailure(error, controller.signal)
@@ -390,22 +425,24 @@ async function showRequestPreview() {
 }
 
 async function generateDraft(revision) {
-  if (activeRequest || activePlanRequest) return
+  if (activeRequest || planAssistant.busy) return
   const project = currentProject()
+  const previous = previews.get(project.id)
+  const retained = previous?.complete ? previous : undefined
   const oneTimeNote = !revision && project.authorMode === 'once' ? project.direction : undefined
   const preview = {
     original: project.manuscript, revision, text: '', model: '',
     status: revision ? '수정안을 준비하는 중이에요.' : '전송할 원고와 자료를 준비하는 중이에요.',
   }
-  previews.set(project.id, preview)
+  if (!retained) previews.set(project.id, preview)
 
   const controller = new AbortController()
-  activeRequest = controller
+  activeRequest = { controller, preview }
   syncControls()
   renderProposal()
   get('proposal-title').focus()
-  const output = document.createTextNode('')
-  proposalBody.replaceChildren(output)
+  const output = retained ? null : document.createTextNode('')
+  if (output) proposalBody.replaceChildren(output)
 
   try {
     let body
@@ -421,22 +458,30 @@ async function generateDraft(revision) {
       signal: controller.signal,
       onText(content) {
         if (!preview.text.trim()) {
-          proposalBody.hidden = false
+          if (output) proposalBody.hidden = false
           preview.status = '초안을 작성하고 있어요.'
           updateProposalActions()
         }
         preview.text += content
-        output.appendData(content)
+        output?.appendData(content)
       },
     })
+    controller.signal.throwIfAborted()
     preview.model = result.model ?? body.model
     preview.usage = result.usage
     preview.complete = !result.truncated
-    preview.status = result.truncated ? '토큰 한도에 도달했어요. 끝 문장을 확인해 주세요.'
-      : revision ? '기존 문단과 비교하고 교체 여부를 선택하세요.' : '원고에 추가할 초안을 확인해 주세요.'
+    if (result.truncated) {
+      preview.status = retained ? '새 초안이 토큰 한도에 도달했어요.' : '토큰 한도에 도달했어요. 끝 문장을 확인해 주세요.'
+    } else {
+      preview.status = revision ? '기존 문단과 비교하고 교체 여부를 선택하세요.' : '원고에 추가할 초안을 확인해 주세요.'
+    }
   } catch (error) {
     preview.status = completionFailure(error, controller.signal)
   } finally {
+    if (retained) {
+      if (preview.complete) previews.set(project.id, preview)
+      else retained.retryStatus = `${preview.status} 이전 초안을 유지했어요.`
+    }
     activeRequest = undefined
     syncControls()
     renderProposal()
@@ -518,88 +563,99 @@ async function refreshProjectMemory(project) {
 
 function currentPlan() {
   const project = currentProject()
-  if (!plans.has(project)) plans.set(project, { target: 'synopsis', idea: '', draft: null })
+  if (!plans.has(project)) {
+    const entries = Object.fromEntries(Object.keys(noteKinds).map(target => [target, { idea: '', draft: null }]))
+    plans.set(project, { target: 'synopsis', entries })
+  }
   return plans.get(project)
 }
 
+function currentPlanEntry() {
+  const { target, entries } = currentPlan()
+  return entries[target]
+}
+
 function renderPlanner() {
-  const plan = currentPlan()
-  planTarget.value = plan.target
-  planIdea.value = plan.idea
-  planIdea.placeholder = noteKinds[plan.target].placeholder
+  const { target } = currentPlan()
+  const entry = currentPlanEntry()
+  planTarget.value = target
+  planIdea.value = entry.idea
+  planIdea.placeholder = noteKinds[target].placeholder
+  planAssistant.useConversation(entry)
+  renderPlanContextLimit()
   renderPlanDraft()
+  updatePlanControls()
+}
+
+function renderPlanContextLimit() {
+  const status = get('plan-context-limit')
+  const message = projectNotesLimitHint(currentProject())
+  status.hidden = !message
+  if (status.textContent !== message) status.textContent = message
 }
 
 function renderPlanDraft() {
-  const draft = currentPlan().draft
-  get('note-draft').hidden = !draft
-  if (!draft) return
-  get('note-draft-title').textContent = `${noteKinds[draft.target].label} 초안`
-  planDraftText.maxLength = writingFields[draft.target]
-  planDraftText.hidden = !draft.text
-  planDraftText.value = draft.text
+  const { target } = currentPlan()
+  const { draft } = currentPlanEntry()
+  get('note-draft').hidden = draft === null
+  get('note-draft-title').textContent = `${noteKinds[target].label} 초안`
+  planDraftText.value = draft ?? ''
 }
 
 function updatePlanControls() {
-  const { draft } = currentPlan()
-  const planning = Boolean(activePlanRequest)
+  const planning = planAssistant.busy
   planTarget.disabled = planning
   planIdea.readOnly = planning
-  planGenerate.disabled = Boolean(activeRequest || activePlanRequest)
-  planGenerate.textContent = planning ? '작성 중…' : draft?.text ? '새 초안 만들기' : '초안 만들기'
-  if (!draft) return
+  planGenerate.hidden = planning
+  planGenerate.disabled = Boolean(activeRequest)
+  planSend.hidden = planning
+  planSend.disabled = Boolean(activeRequest) || !planIdea.value.trim()
+  planStop.hidden = !planning
+  planReset.disabled = planning || planTranscript.hidden
 
-  const tooLong = !planning && appendParagraphs(currentProject()[draft.target] ?? '', draft.text.trim()).length > writingFields[draft.target]
-  const message = tooLong ? '메모에 추가하려면 기존 메모나 초안의 길이를 줄여 주세요.' : draft.status
+  const { target } = currentPlan()
+  const text = currentPlanEntry().draft?.trim() ?? ''
+  const tooLong = appendParagraphs(currentProject()[target] ?? '', text).length > writingFields[target]
   const status = get('note-draft-status')
-  if (status.textContent !== message) status.textContent = message
+  status.hidden = !tooLong
+  if (tooLong && !status.textContent) status.textContent = '메모에 추가하려면 기존 메모나 초안의 길이를 줄여 주세요.'
   planDraftText.readOnly = planning
-  get('plan-stop').hidden = !planning
-  get('plan-discard').hidden = planning
-  planAccept.hidden = planning
-  planAccept.disabled = planning || tooLong || !draft.text.trim()
+  get('plan-discard').disabled = planning
+  planAccept.disabled = planning || tooLong || !text
 }
 
-async function generateNoteDraft() {
-  if (activeRequest || activePlanRequest) return
+async function sendPlanMessage(mode) {
+  if (activeRequest || planAssistant.busy) return
   const project = currentProject()
-  const plan = currentPlan()
-  const draft = { target: plan.target, text: '', status: '작품 메모를 참고해 초안을 작성하고 있어요.' }
-  plan.draft = draft
-  const controller = new AbortController()
-  activePlanRequest = controller
-  renderPlanDraft()
-  syncControls()
-  get('note-draft-title').focus()
-
-  try {
-    const result = await requestCompletion('/api/plan', {
-      model: modelFor(project, 'plan'),
-      maxTokens: project.maxTokens,
-      target: draft.target,
-      idea: plan.idea.trim(),
-      systemPrompt: project.notePrompts?.[draft.target],
-      notes: {
-        ...projectNotesForRequest(project),
-        manuscriptMemory: memoryForPrompt(project),
-      },
-    }, {
-      signal: controller.signal,
-      onText(content) {
-        draft.text += content
-        planDraftText.hidden = false
-        planDraftText.value = draft.text
-      },
-    })
-    draft.status = result.truncated ? '토큰 한도에 도달했어요. 끝부분을 확인해 주세요.' : '초안을 편집한 뒤 메모에 추가할 수 있어요.'
-  } catch (error) {
-    draft.status = completionFailure(error, controller.signal)
-  } finally {
-    activePlanRequest = undefined
-    syncControls()
-    if (document.activeElement === document.body && notePlanner.open && !get('notes-panel').hidden) {
-      get('note-draft-title').focus()
-    }
+  const { target } = currentPlan()
+  const entry = currentPlanEntry()
+  const idea = entry.idea
+  const previousDraft = entry.draft
+  const message = idea.trim() || (mode === 'draft' ? '작품 메모와 지금까지의 대화를 바탕으로 초안을 작성해 주세요.' : '')
+  if (!message) return
+  entry.idea = ''
+  planIdea.value = ''
+  const sent = await planAssistant.send({
+    kind: 'note',
+    mode,
+    model: modelFor(project, 'plan'),
+    maxTokens: project.maxTokens,
+    target,
+    context: {
+      ...projectNotesForRequest(project),
+      manuscriptMemory: memoryForPrompt(project),
+    },
+    systemPrompt: project.notePrompts?.[target],
+    draft: previousDraft?.trim() || null,
+  }, message)
+  if (!sent) entry.idea = idea
+  if (currentPlanEntry() !== entry) return
+  planIdea.value = entry.idea
+  updatePlanControls()
+  if (document.activeElement === document.body && notePlanner.open && !get('notes-panel').hidden) {
+    const receivedDraft = mode === 'draft' && sent && entry.draft !== null && entry.draft !== previousDraft
+    const field = receivedDraft ? planDraftText : planIdea
+    field.focus()
   }
 }
 
@@ -686,7 +742,7 @@ function bindNoteImport(id, key) {
   bindField(id, value => {
     currentProject()[key] = value
     showNoteStatus(id)
-    updatePlanControls()
+    renderPlanContextLimit()
   })
   button.addEventListener('click', () => input.click())
   input.addEventListener('change', async () => {
@@ -707,7 +763,7 @@ function bindNoteImport(id, key) {
       if (project === currentProject()) {
         field.value = value
         showNoteStatus(id, `파일 ${formatNumber.format(files.length)}개를 불러왔어요.`)
-        updatePlanControls()
+        renderPlanContextLimit()
         writingInputsChanged()
       }
       saveWorkspace()
@@ -753,12 +809,15 @@ get('generate-revision').addEventListener('click', () => {
   const paragraph = selectedRevision()
   if (paragraph) generateDraft(paragraph)
 })
-get('preview-request').addEventListener('click', showRequestPreview)
+get('preview-request').addEventListener('click', event => showRequestPreview({ origin: event.currentTarget }))
+get('preview-semantic-search').addEventListener('click', () => showRequestPreview({ refreshSemantic: true }))
+get('retry-search').addEventListener('click', event => showRequestPreview({ refreshSemantic: true, origin: event.currentTarget }))
 get('close-request-preview').addEventListener('click', () => {
+  const origin = previewOrigin
   closeRequestPreview()
   syncControls()
-  switchPanel('generate')
-  get('preview-request').focus()
+  if (origin?.getClientRects().length) origin.focus()
+  else document.querySelector('.tool-switcher [aria-pressed="true"]').focus()
 })
 get('open-memory').addEventListener('click', () => {
   switchPanel('notes')
@@ -784,42 +843,49 @@ get('edit-plan-prompt').addEventListener('click', () => {
   switchPanel('prompt')
   systemPrompt.focus()
 })
-planIdea.maxLength = noteIdeaLimit
+planIdea.maxLength = assistantMessageLimit
+planDraftText.maxLength = assistantNoteDraftLimit
 planTarget.addEventListener('change', () => {
   currentPlan().target = planTarget.value
-  planIdea.placeholder = noteKinds[planTarget.value].placeholder
+  renderPlanner()
 })
-planIdea.addEventListener('input', () => { currentPlan().idea = planIdea.value })
+planIdea.addEventListener('input', () => {
+  currentPlanEntry().idea = planIdea.value
+  updatePlanControls()
+})
 get('note-planner-form').addEventListener('submit', event => {
   event.preventDefault()
-  generateNoteDraft()
+  sendPlanMessage('chat')
 })
-get('plan-stop').addEventListener('click', () => activePlanRequest?.abort())
+planGenerate.addEventListener('click', () => sendPlanMessage('draft'))
+planStop.addEventListener('click', () => planAssistant.stop())
+planReset.addEventListener('click', () => {
+  planAssistant.reset()
+  planIdea.focus()
+})
 planDraftText.addEventListener('input', () => {
-  const { draft } = currentPlan()
-  if (!draft || activePlanRequest) return
-  draft.text = planDraftText.value
+  if (planAssistant.busy) return
+  currentPlanEntry().draft = planDraftText.value
   updatePlanControls()
 })
 get('plan-discard').addEventListener('click', () => {
-  currentPlan().draft = null
+  currentPlanEntry().draft = null
   renderPlanDraft()
   updatePlanControls()
-  planGenerate.focus()
+  planIdea.focus()
 })
 planAccept.addEventListener('click', () => {
-  const plan = currentPlan()
-  const { draft } = plan
-  if (!draft || activePlanRequest || planAccept.disabled) return
+  const { target } = currentPlan()
+  const entry = currentPlanEntry()
+  if (!entry.draft || planAssistant.busy || planAccept.disabled) return
   const project = currentProject()
-  const text = appendParagraphs(project[draft.target] ?? '', draft.text.trim())
-  project[draft.target] = text
-  const fieldId = Object.keys(noteFields).find(id => noteFields[id] === draft.target)
+  const text = appendParagraphs(project[target] ?? '', entry.draft.trim())
+  project[target] = text
+  const fieldId = Object.keys(noteFields).find(id => noteFields[id] === target)
   const field = get(fieldId)
   field.value = text
-  plan.draft = null
+  entry.draft = null
   renderPlanDraft()
-  updatePlanControls()
   saveWorkspace()
   writingInputsChanged()
   notePlanner.open = false
@@ -864,7 +930,7 @@ get('generate-panel').addEventListener('submit', event => {
   event.preventDefault()
   generateDraft()
 })
-stop.addEventListener('click', () => activeRequest?.abort())
+stop.addEventListener('click', () => activeRequest?.controller.abort())
 discard.addEventListener('click', () => {
   previews.delete(currentProject().id)
   renderProposal()
@@ -915,21 +981,46 @@ const filesDialog = get('files-dialog')
 const fileStatus = message => { get('files-status').textContent = message }
 const packOptions = () => ({ lorebook: get('pack-lore').checked, prompts: get('pack-prompts').checked })
 const downloadJson = (value, extension) => download(JSON.stringify(value, null, 2), extension, 'application/json;charset=utf-8')
+const packReview = get('pack-review')
+let pendingPack
+let filesSession = 0
+
+function clearPackReview() {
+  pendingPack = undefined
+  packReview.hidden = true
+}
+
 get('open-files').addEventListener('click', () => {
+  filesSession++
+  clearPackReview()
   fileStatus('')
   filesDialog.showModal()
+})
+filesDialog.addEventListener('close', () => {
+  // The close event is queued and the dialog may already be open again.
+  if (!filesDialog.open) clearPackReview()
 })
 get('export-project').addEventListener('click', () => {
   const project = currentProject()
   download([projectName(project), project.manuscript].filter(Boolean).join('\n\n'), 'txt', 'text/plain;charset=utf-8')
 })
-get('download-backup').addEventListener('click', () => downloadJson(exportProject(currentProject()), 'relay.json'))
+function downloadProjectBackup() {
+  downloadJson(exportProject(currentProject()), 'relay.json')
+}
+get('download-backup').addEventListener('click', downloadProjectBackup)
+get('download-storage-backup').addEventListener('click', downloadProjectBackup)
 get('download-pack').addEventListener('click', () => {
   try { downloadJson(exportPack(currentProject(), packOptions()), 'relay-settings.json') }
   catch (error) { fileStatus(error.message) }
 })
 
-function bindProjectImport(action, read, apply) {
+function checkImportProject(project) {
+  if (activeRequest || planAssistant.busy || project !== currentProject()) {
+    throw new Error('작품 상태가 바뀌었어요. 다시 불러와 주세요.')
+  }
+}
+
+function bindProjectImport(action, read, prepare) {
   const input = get(`${action}-file`)
   const button = get(action)
   button.addEventListener('click', () => input.click())
@@ -937,17 +1028,18 @@ function bindProjectImport(action, read, apply) {
     const file = input.files[0]
     input.value = ''
     if (!file) return
+    clearPackReview()
+    fileStatus('')
+    const session = filesSession
     const project = currentProject()
-    const options = packOptions()
     button.disabled = true
     try {
-      const imported = read(await file.text(), options)
-      if (activeRequest || activePlanRequest || project !== currentProject()) throw new Error('작품 상태가 바뀌었어요. 다시 불러와 주세요.')
-      const success = apply(imported, project)
-      renderWorkspace()
-      fileStatus(saveWorkspace() ? success : '불러왔지만 브라우저에 저장할 수 없어요.')
+      const text = await file.text()
+      if (!filesDialog.open || session !== filesSession) return
+      checkImportProject(project)
+      prepare(read(text, packOptions()), project)
     } catch (error) {
-      fileStatus(error.message)
+      if (filesDialog.open && session === filesSession) fileStatus(error.message)
     } finally {
       button.disabled = false
     }
@@ -956,15 +1048,63 @@ function bindProjectImport(action, read, apply) {
 bindProjectImport('restore-backup', readProject, restored => {
   workspace.projects.push(restored)
   workspace.activeProjectId = restored.id
-  return `‘${projectName(restored)}’을 새 작품으로 복원했어요.`
+  renderWorkspace()
+  fileStatus(saveWorkspace() ? `‘${projectName(restored)}’을 새 작품으로 복원했어요.` : '불러왔지만 브라우저에 저장할 수 없어요.')
 })
 bindProjectImport('import-pack', readPack, (settings, project) => {
-  Object.assign(project, settings)
-  return `‘${projectName(project)}’에 선택한 설정을 적용했어요.`
+  const details = [`‘${projectName(project)}’의 선택한 설정을 교체해요.`]
+  if (Object.hasOwn(settings, 'lorebook')) {
+    const before = project.lorebook?.length ?? 0
+    const after = settings.lorebook.length
+    details.push(before && !after
+      ? `가져올 로어북이 비어 있어 기존 카드 ${formatNumber.format(before)}장이 모두 삭제돼요.`
+      : `기존 로어북 카드 ${formatNumber.format(before)}장이 가져오는 카드 ${formatNumber.format(after)}장으로 교체돼요.`)
+  }
+  if (Object.keys(settings).some(key => key !== 'lorebook')) details.push('문체·프롬프트 설정을 교체해요.')
+  pendingPack = { settings, project }
+  get('pack-review-details').textContent = details.join(' ')
+  packReview.hidden = false
+  get('pack-review-title').focus()
+})
+for (const id of ['pack-lore', 'pack-prompts']) {
+  get(id).addEventListener('change', () => {
+    if (!pendingPack) return
+    clearPackReview()
+    fileStatus('가져올 항목을 바꿨어요. 설정 파일을 다시 선택해 주세요.')
+  })
+}
+get('cancel-pack-import').addEventListener('click', () => {
+  clearPackReview()
+  fileStatus('설정 가져오기를 취소했어요.')
+  get('import-pack').focus()
+})
+get('apply-pack-import').addEventListener('click', () => {
+  if (!pendingPack || !filesDialog.open) return
+  const { settings, project } = pendingPack
+  try {
+    checkImportProject(project)
+    const keys = Object.keys(settings)
+    const previous = new Map(keys.filter(key => Object.hasOwn(project, key)).map(key => [key, project[key]]))
+    Object.assign(project, settings)
+    if (!saveWorkspace()) {
+      for (const key of keys) {
+        if (previous.has(key)) project[key] = previous.get(key)
+        else delete project[key]
+      }
+      throw new Error('설정을 브라우저에 저장할 수 없어 교체하지 않았어요.')
+    }
+    renderWorkspace()
+    fileStatus(`‘${projectName(project)}’에 선택한 설정을 적용했어요.`)
+  } catch (error) {
+    fileStatus(error.message)
+  } finally {
+    clearPackReview()
+    get('import-pack').focus()
+  }
 })
 function syncWorkspaceFromStorage() {
   if (!syncSavedWorkspace(localStorage.getItem(storageKey))) {
-    storageWarning = '다른 탭에서 작품을 수정했어요. 이 탭의 원고를 내보내거나 새로고침해 주세요.'
+    storageWarning = storageConflictMessage
   }
   showStorageStatus()
 }

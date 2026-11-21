@@ -1,0 +1,30 @@
+.assistant-transcript {
+  display: grid;
+  gap: 8px;
+  max-height: min(270px, 46dvh);
+  overflow: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+  margin: 0;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+}
+
+.assistant-transcript:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.assistant-status:empty { display: none; }
+.assistant-message {
+  min-width: 0;
+  width: fit-content;
+  max-width: 96%;
+  padding: 7px 9px;
+  border-radius: 7px;
+  background: var(--chrome);
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.assistant-message[data-role="user"] { justify-self: end; background: var(--tint); }
+.assistant-message strong { display: block; margin-bottom: 2px; color: var(--muted); font-size: 11px; }
+.assistant-message p { white-space: pre-wrap; }

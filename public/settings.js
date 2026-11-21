@@ -1,4 +1,5 @@
-import { chatModelKey, freeModel, pricing, savedChatModel, settingsChangeEvent } from './completion.js'
+import { freeModel, pricing, settingsChangeEvent } from './completion.js'
+import { classifyModel, unclassifiedGeneration } from './model-classification.mjs'
 import { jsonRequest } from './request-tools.mjs'
 import { searchFor } from './retrieval.mjs'
 import { currentProjectOf, projectName, readWorkspace, storageKey } from './writing-workspace.mjs'
@@ -6,18 +7,21 @@ import { optionalProjectModels, validModelId, writingTokenLimits } from './writi
 
 const get = id => document.getElementById(id)
 const notifyChange = key => document.dispatchEvent(new CustomEvent(settingsChangeEvent, { detail: key }))
+const labelOrder = new Intl.Collator('ko', { numeric: true })
 
 function setupSettings(root) {
   const projectSelect = get('settings-project')
   const limit = get('generation-limit')
   const dialog = get('model-dialog')
   const search = get('model-search')
+  const publisherFilter = get('model-publisher')
+  const generationFilter = get('model-generation')
   const modelList = get('model-list')
   const retry = get('retry-catalog')
   const modelButtons = [...root.querySelectorAll('[data-model]')]
   const priceFilters = [...dialog.querySelectorAll('[data-free]')]
   const catalogs = {
-    text: { path: '/api/models', models: [freeModel] },
+    text: { path: '/api/models', models: [classifyModel(freeModel)] },
     embedding: { path: '/api/embeddings/models', models: [] },
   }
   let workspace
@@ -30,7 +34,6 @@ function setupSettings(root) {
   const modelName = (catalog, id) => catalog.models.find(model => model.id === id)?.name ?? id
 
   function selectedModel(key, project) {
-    if (key === 'chat') return savedChatModel()
     if (key === 'embedding') return project ? searchFor(project).model : ''
     return project?.[key] ?? ''
   }
@@ -53,7 +56,7 @@ function setupSettings(root) {
       const inherited = project && optionalProjectModels.includes(key) && !id
       button.querySelector('strong').textContent = inherited ? '이어쓰기 모델 사용' : name || '선택할 수 없어요'
       button.querySelector('.model-label > span').textContent = inherited ? modelName(catalog, project.model) : name === id ? '' : id
-      button.disabled = key !== 'chat' && !project
+      button.disabled = !project
     }
   }
 
@@ -98,18 +101,11 @@ function setupSettings(root) {
   function chooseModel(id) {
     const { key, projectId } = picker
     try {
-      if (key === 'chat') {
-        localStorage.setItem(chatModelKey, id)
-        renderSettings()
-        showStatus('채팅 모델을 저장했어요.')
-        notifyChange(chatModelKey)
-      } else {
-        saveProjectSetting(projectId, project => {
-          if (key === 'embedding') project.search = { ...searchFor(project), model: id }
-          else if (id) project[key] = id
-          else delete project[key]
-        })
-      }
+      saveProjectSetting(projectId, project => {
+        if (key === 'embedding') project.search = { ...searchFor(project), model: id }
+        else if (id) project[key] = id
+        else delete project[key]
+      })
       dialog.close()
     } catch {
       const error = get('model-save-error')
@@ -146,20 +142,50 @@ function setupSettings(root) {
     return item
   }
 
+  function setFilterOptions(filter, label, options) {
+    const selected = filter.value
+    filter.replaceChildren(new Option(label, ''), ...[...options].map(([value, name]) => new Option(name, value)))
+    filter.value = options.has(selected) ? selected : ''
+    filter.disabled = !options.size
+  }
+
+  function matchesPublisher(model) {
+    return !publisherFilter.value || model.publisher === publisherFilter.value
+  }
+
+  function renderGenerationFilter() {
+    const models = catalogFor(picker.key).models.filter(matchesPublisher)
+    const generations = new Set(models.map(model => model.generation))
+    const sorted = [...generations].filter(generation => generation !== unclassifiedGeneration).sort(labelOrder.compare)
+    if (generations.has(unclassifiedGeneration)) sorted.push(unclassifiedGeneration)
+    setFilterOptions(generationFilter, '모든 세대', new Map(sorted.map(label => [label, label])))
+  }
+
+  function renderClassificationFilters() {
+    const publishers = catalogFor(picker.key).models.map(model => [model.publisher, model.publisherName])
+    publishers.sort(([, a], [, b]) => labelOrder.compare(a, b))
+    setFilterOptions(publisherFilter, '모든 제공사', new Map(publishers))
+    renderGenerationFilter()
+  }
+
   function renderPicker() {
     const { key, projectId } = picker
     const catalog = catalogFor(key)
     const project = workspace?.projects.find(item => item.id === projectId)
     const selected = selectedModel(key, project)
     const query = search.value.trim().toLowerCase()
-    const models = catalog.models.filter(model => (!freeOnly || model.free) &&
-      `${model.name} ${model.id}`.toLowerCase().includes(query))
+    const generation = generationFilter.value
+    const models = catalog.models.filter(model => matchesPublisher(model) &&
+      (!generation || model.generation === generation) && (!freeOnly || model.free) &&
+      `${model.name} ${model.id} ${model.publisherName} ${model.generation}`.toLowerCase().includes(query))
+    const count = models.length
     const fallback = { id: '', name: '이어쓰기 모델 사용' }
-    if (optionalProjectModels.includes(key) && fallback.name.includes(query)) models.unshift(fallback)
+    if (!publisherFilter.value && !generation && optionalProjectModels.includes(key) && fallback.name.includes(query)) models.unshift(fallback)
 
     get('model-list-status').textContent = catalog.loading ? '모델 목록을 불러오는 중이에요.'
-      : catalog.error || (!models.length ? '일치하는 모델이 없어요.'
-        : selected && !catalog.models.some(model => model.id === selected) ? '현재 모델이 목록에 없어요. 다른 모델을 선택할 수 있어요.' : '')
+      : catalog.error || (!models.length ? '조건에 맞는 모델이 없어요.'
+        : selected && !catalog.models.some(model => model.id === selected) ? '현재 모델이 목록에 없어요. 다른 모델을 선택할 수 있어요.'
+          : count ? `모델 ${count.toLocaleString('ko-KR')}개` : '')
     retry.hidden = !catalog.error || catalog.loading
     modelList.replaceChildren(...models.map(model => modelOption(model, selected)))
     modelList.scrollTop = 0
@@ -173,14 +199,17 @@ function setupSettings(root) {
     try {
       const data = await jsonRequest(catalog.path)
       if (!Array.isArray(data.models)) throw new Error('모델 목록을 읽을 수 없어요.')
-      catalog.models = data.models.filter(model => validModelId(model?.id))
+      catalog.models = data.models.filter(model => validModelId(model?.id)).map(classifyModel)
       if (data.catalogAvailable === false) catalog.error = '최신 모델 목록을 불러오지 못했어요.'
     } catch (error) {
       catalog.error = error instanceof TypeError ? '모델 목록에 연결할 수 없어요.' : error.message
     } finally {
       catalog.loading = false
       renderSettings()
-      if (dialog.open && catalogFor(picker.key) === catalog) renderPicker()
+      if (dialog.open && catalogFor(picker.key) === catalog) {
+        renderClassificationFilters()
+        renderPicker()
+      }
     }
   }
 
@@ -194,6 +223,9 @@ function setupSettings(root) {
       freeOnly = false
       for (const filter of priceFilters) filter.setAttribute('aria-pressed', String(filter.dataset.free === 'false'))
       search.value = ''
+      publisherFilter.value = ''
+      generationFilter.value = ''
+      renderClassificationFilters()
       renderPicker()
       dialog.showModal()
     })
@@ -206,6 +238,11 @@ function setupSettings(root) {
     })
   }
   search.addEventListener('input', renderPicker)
+  publisherFilter.addEventListener('change', () => {
+    renderGenerationFilter()
+    renderPicker()
+  })
+  generationFilter.addEventListener('change', renderPicker)
   retry.addEventListener('click', () => {
     search.focus()
     loadCatalog(catalogFor(picker.key))
@@ -222,9 +259,8 @@ function setupSettings(root) {
     }
   })
   window.addEventListener('storage', event => {
-    if (event.key === storageKey || event.key === null) loadWorkspace()
-    else if (event.key === chatModelKey) renderSettings()
-    else return
+    if (event.key !== storageKey && event.key !== null) return
+    loadWorkspace()
     if (dialog.open) renderPicker()
   })
   loadWorkspace()

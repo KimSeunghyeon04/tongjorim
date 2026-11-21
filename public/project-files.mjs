@@ -13,7 +13,9 @@ const projectKeys = [
   'title', 'synopsis', 'characterNotes', 'worldNotes', 'model', 'maxTokens', 'manuscript', 'direction', 'legacySceneNotes',
   'manuscriptMemory', 'autoMemory', 'lorebook', 'search', 'sourceLimits', ...optionalProjectModels, ...promptKeys,
 ]
-const cardKeys = ['id', 'name', 'aliases', 'kind', 'description', 'priority', 'always']
+const loreCardFieldKeys = ['name', 'aliases', 'kind', 'description', 'priority', 'always']
+const cardKeys = ['id', ...loreCardFieldKeys]
+export const loreCardFields = card => pick(card, loreCardFieldKeys)
 
 export function defaultReferenceSettings() {
   return defaultReferences.map(key => ({ key, enabled: true }))
@@ -26,11 +28,15 @@ function validReferences(refs) {
 }
 
 export function validLoreCard(card) {
-  return record(card) && limited(card.id, 100) && Boolean(card.id) &&
-    limited(card.name, loreLimits.names) && Boolean(card.name.trim()) &&
+  return record(card) && limited(card.id, 100) && Boolean(card.id) && validLoreCardFields(card)
+}
+
+export function validLoreCardFields(card, { allowIncomplete = false } = {}) {
+  return record(card) && limited(card.name, loreLimits.names) && (allowIncomplete || Boolean(card.name.trim())) &&
     Array.isArray(card.aliases) && card.aliases.length <= loreLimits.aliases &&
     card.aliases.every(alias => limited(alias, loreLimits.names) && Boolean(alias.trim())) &&
-    Object.hasOwn(loreKinds, card.kind) && limited(card.description, loreLimits.description) && Boolean(card.description.trim()) &&
+    typeof card.kind === 'string' && Object.hasOwn(loreKinds, card.kind) && limited(card.description, loreLimits.description) &&
+    (allowIncomplete || Boolean(card.description.trim())) &&
     Number.isInteger(card.priority) && card.priority >= -100 && card.priority <= 100 && validBoolean(card.always)
 }
 

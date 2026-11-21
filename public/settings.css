@@ -105,6 +105,9 @@ body:has(> .settings-popup[open]) { overflow: hidden; }
 .close-button:hover { background: var(--tint); }
 .model-query { display: grid; gap: 12px; padding: 0 18px 12px; border-bottom: 1px solid var(--line); }
 .model-query input { width: 100%; min-width: 0; min-height: 40px; padding: 8px 10px; background: #f8f9fd; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); font-size: 14px; }
+.model-classification { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.model-classification label { display: grid; gap: 5px; color: var(--muted); font-size: 12px; font-weight: 650; }
+.model-classification select { font-weight: 400; }
 .filters { display: flex; gap: 5px; }
 .filters button { min-height: 32px; padding: 4px 11px; border: 1px solid var(--line); border-radius: 7px; background: var(--paper); color: var(--muted); font-size: 12px; font-weight: 650; }
 .filters button[aria-pressed="true"] { border-color: #c9d0fc; background: var(--tint); color: var(--accent); }
