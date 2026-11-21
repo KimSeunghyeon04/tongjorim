@@ -26,5 +26,61 @@
   overflow-wrap: anywhere;
 }
 .assistant-message[data-role="user"] { justify-self: end; background: var(--tint); }
-.assistant-message strong { display: block; margin-bottom: 2px; color: var(--muted); font-size: 11px; }
-.assistant-message p { white-space: pre-wrap; }
+.assistant-message > strong { display: block; margin-bottom: 4px; color: var(--muted); font-size: 11px; }
+.assistant-message-body { white-space: pre-wrap; }
+.assistant-message-body :is(ul, ol) { margin-block: 0; padding-inline-start: 1.35em; white-space: normal; }
+.assistant-message-body li + li { margin-top: .25em; }
+.assistant-message-body > * + * { margin-top: .65em; }
+.assistant-reply-heading { font-weight: 750; }
+
+.manuscript-stage > .storage-error { width: min(100%, 800px); margin-inline: auto; }
+.manuscript-stage:has(.note-workspace:not([hidden])) {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+.manuscript-stage:has(.note-workspace:not([hidden])) > .storage-error {
+  flex: none;
+  width: min(calc(100% - 32px), 800px);
+  margin-block: 12px;
+}
+.note-workspace {
+  --note-gutter: clamp(24px, 4vw, 52px);
+  display: grid;
+  flex: 1;
+  min-height: 0;
+  width: min(100%, 900px);
+  margin-inline: auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  background: var(--paper);
+}
+.note-workspace-header,
+.note-workspace-target {
+  display: flex;
+  align-items: center;
+  gap: 10px 16px;
+  padding-inline: var(--note-gutter);
+}
+.note-workspace-header { justify-content: space-between; padding-block: 16px 6px; }
+.note-workspace-header h2 { font-size: 21px; letter-spacing: -.03em; }
+.note-workspace-target { flex-wrap: wrap; padding-block: 6px 12px; border-bottom: 1px solid var(--line); }
+.note-workspace-target label { font-size: 13px; font-weight: 700; }
+.note-workspace-target select { width: auto; min-width: 112px; }
+.note-conversation {
+  min-height: 0;
+  overflow-y: auto;
+  overflow-anchor: none;
+  scrollbar-gutter: stable;
+  padding: 18px var(--note-gutter) 24px;
+}
+.note-conversation:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+.note-empty { margin-top: 14px; color: var(--muted); font-size: 14px; line-height: 1.6; }
+.note-workspace .assistant-transcript { max-height: none; overflow: visible; padding: 0; gap: 14px; border: 0; }
+.note-workspace .assistant-message { font-size: 15px; line-height: 1.7; padding: 11px 16px; }
+.note-workspace .assistant-message[data-role="assistant"] { width: 100%; max-width: 100%; }
+.note-workspace .assistant-message[data-role="user"] { max-width: 84%; }
+.note-workspace .note-draft { padding: 16px 0 0; margin-top: 18px; }
+.note-composer { display: grid; gap: 7px; padding: 12px var(--note-gutter) 14px; border-top: 1px solid var(--line); }
+.note-composer-actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px; }
+.writer .note-composer textarea.writing-field { min-height: 62px; max-height: 140px; }

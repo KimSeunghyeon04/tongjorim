@@ -32,6 +32,8 @@ const stop = get('stop-generation')
 const accept = get('accept-proposal')
 const discard = get('discard-proposal')
 const notePlanner = get('note-planner')
+const openNoteWorkspace = get('open-note-workspace')
+const planStatus = get('plan-status')
 const planTarget = get('plan-target')
 const planIdea = get('plan-idea')
 const planGenerate = get('plan-generate')
@@ -78,7 +80,8 @@ const workspace = loadWorkspace()
 const currentProject = () => currentProjectOf(workspace)
 const planAssistant = createWritingAssistant({
   transcript: planTranscript,
-  status: get('plan-status'),
+  scrollport: get('plan-conversation'),
+  status: planStatus,
   onChange: syncControls,
   onReply({ draft }) {
     if (draft === null) return
@@ -197,6 +200,7 @@ function renderWorkspace() {
 
 function syncControls() {
   const busy = Boolean(activeRequest || planAssistant.busy)
+  openNoteWorkspace.disabled = Boolean(activeRequest)
   for (const element of [generate, projectSelect, get('add-project'), get('open-files')]) {
     element.disabled = busy
   }
@@ -347,6 +351,7 @@ function writingInputsChanged() {
 
 function goToPassage({ start, end, text }) {
   if (manuscript.value.slice(start, end) !== text) return
+  setNoteWorkspace(false)
   manuscript.focus()
   manuscript.setSelectionRange(start, end)
   const style = getComputedStyle(manuscript)
@@ -373,6 +378,7 @@ const sourcePanel = setupSourcePanel({
 
 async function showRequestPreview({ refreshSemantic = false, origin } = {}) {
   if (activePreview || activeRequest || planAssistant.busy) return
+  setNoteWorkspace(false)
   if (origin) previewOrigin = origin
   const project = currentProject()
   const controller = new AbortController()
@@ -426,6 +432,7 @@ async function showRequestPreview({ refreshSemantic = false, origin } = {}) {
 
 async function generateDraft(revision) {
   if (activeRequest || planAssistant.busy) return
+  setNoteWorkspace(false)
   const project = currentProject()
   const previous = previews.get(project.id)
   const retained = previous?.complete ? previous : undefined
@@ -575,6 +582,15 @@ function currentPlanEntry() {
   return entries[target]
 }
 
+function setNoteWorkspace(visible) {
+  if (visible === !notePlanner.hidden) return
+  if (!visible) planAssistant.rememberScroll()
+  notePlanner.hidden = !visible
+  get('manuscript-view').hidden = visible
+  openNoteWorkspace.setAttribute('aria-expanded', String(visible))
+  if (visible) planAssistant.restoreScroll()
+}
+
 function renderPlanner() {
   const { target } = currentPlan()
   const entry = currentPlanEntry()
@@ -614,7 +630,10 @@ function updatePlanControls() {
   planReset.disabled = planning || planTranscript.hidden
 
   const { target } = currentPlan()
-  const text = currentPlanEntry().draft?.trim() ?? ''
+  const { draft } = currentPlanEntry()
+  get('plan-empty').hidden = !planTranscript.hidden || draft !== null
+  get('plan-show-draft').hidden = draft === null
+  const text = draft?.trim() ?? ''
   const tooLong = appendParagraphs(currentProject()[target] ?? '', text).length > writingFields[target]
   const status = get('note-draft-status')
   status.hidden = !tooLong
@@ -652,7 +671,7 @@ async function sendPlanMessage(mode) {
   if (currentPlanEntry() !== entry) return
   planIdea.value = entry.idea
   updatePlanControls()
-  if (document.activeElement === document.body && notePlanner.open && !get('notes-panel').hidden) {
+  if (document.activeElement === document.body && !notePlanner.hidden) {
     const receivedDraft = mode === 'draft' && sent && entry.draft !== null && entry.draft !== previousDraft
     const field = receivedDraft ? planDraftText : planIdea
     field.focus()
@@ -837,9 +856,18 @@ for (const [id, key] of Object.entries(noteFields)) bindNoteImport(id, key)
 planTarget.replaceChildren(...Object.entries(noteKinds).map(([key, kind]) => new Option(kind.label, key)))
 promptTarget.append(...Object.entries(noteKinds).map(([key, kind]) => new Option(`${kind.label} 도우미`, key)))
 promptTarget.addEventListener('change', renderPromptEditor)
+openNoteWorkspace.addEventListener('click', () => {
+  setNoteWorkspace(true)
+  get('note-workspace-title').focus()
+})
+get('close-note-workspace').addEventListener('click', () => {
+  setNoteWorkspace(false)
+  get('active-project-name').focus()
+})
 get('edit-plan-prompt').addEventListener('click', () => {
   promptTarget.value = currentPlan().target
   renderPromptEditor()
+  setNoteWorkspace(false)
   switchPanel('prompt')
   systemPrompt.focus()
 })
@@ -859,6 +887,7 @@ get('note-planner-form').addEventListener('submit', event => {
 })
 planGenerate.addEventListener('click', () => sendPlanMessage('draft'))
 planStop.addEventListener('click', () => planAssistant.stop())
+get('plan-show-draft').addEventListener('click', () => planDraftText.focus())
 planReset.addEventListener('click', () => {
   planAssistant.reset()
   planIdea.focus()
@@ -886,11 +915,10 @@ planAccept.addEventListener('click', () => {
   field.value = text
   entry.draft = null
   renderPlanDraft()
-  saveWorkspace()
+  const saved = saveWorkspace()
   writingInputsChanged()
-  notePlanner.open = false
-  showNoteStatus(fieldId, '초안을 메모에 추가했어요.')
-  field.focus()
+  planStatus.textContent = saved ? '초안을 작품 메모에 추가했어요.' : '메모에 추가했지만 브라우저에 저장하지 못했어요.'
+  planIdea.focus()
   field.setSelectionRange(text.length, text.length)
   field.scrollTop = field.scrollHeight
 })

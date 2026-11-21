@@ -41,14 +41,83 @@ function parseReply(text, kind, truncated) {
   return { reply: reply.trim(), draft: kind === 'lore' && draft ? loreCardFields(draft) : draft }
 }
 
-export function createWritingAssistant({ transcript, status, onChange, onReply }) {
+function appendEmphasis(parent, text) {
+  let start = 0
+  for (const match of text.matchAll(/(\*\*|__)(?=\S)(.+?)\1/g)) {
+    const emphasis = document.createElement('strong')
+    emphasis.textContent = match[2]
+    parent.append(text.slice(start, match.index), emphasis)
+    start = match.index + match[0].length
+  }
+  parent.append(text.slice(start))
+}
+
+function renderAssistantText(body, text) {
+  let paragraph
+  let list
+  for (const line of text.split(/\r\n?|\n/)) {
+    const heading = /^ {0,3}#{1,6}\s+(.+)$/.exec(line)
+    const item = /^ {0,3}([-+*]|\d+[.)])\s+(.+)$/.exec(line)
+    if (heading) {
+      const title = document.createElement('p')
+      title.className = 'assistant-reply-heading'
+      appendEmphasis(title, heading[1])
+      body.append(title)
+    } else if (item) {
+      const number = Number.parseInt(item[1], 10)
+      const tag = Number.isNaN(number) ? 'UL' : 'OL'
+      if (list?.tagName !== tag) {
+        list = document.createElement(tag.toLowerCase())
+        if (tag === 'OL') list.start = number
+        body.append(list)
+      }
+      const row = document.createElement('li')
+      appendEmphasis(row, item[2])
+      list.append(row)
+      paragraph = undefined
+      continue
+    } else if (line.trim()) {
+      if (paragraph) paragraph.append('\n')
+      else {
+        paragraph = document.createElement('p')
+        body.append(paragraph)
+      }
+      appendEmphasis(paragraph, line)
+      list = undefined
+      continue
+    }
+    paragraph = undefined
+    list = undefined
+  }
+}
+
+export function createWritingAssistant({ transcript, scrollport = transcript, status, onChange, onReply }) {
   const conversations = new WeakMap()
   let conversation = { history: [] }
   let conversationKey
   let active
 
-  transcript.tabIndex = 0
+  scrollport.tabIndex = 0
   transcript.setAttribute('aria-live', 'polite')
+
+  function rememberScroll() {
+    if (scrollport.clientHeight) conversation.scrollTop = scrollport.scrollTop
+  }
+
+  function revealMessage(message) {
+    if (!scrollport.clientHeight) {
+      conversation.scrollTarget = message
+      return
+    }
+    scrollport.scrollTop += message.getBoundingClientRect().top - scrollport.getBoundingClientRect().top - scrollport.clientTop
+    conversation.scrollTarget = undefined
+  }
+
+  function restoreScroll() {
+    if (!scrollport.clientHeight) return
+    if (conversation.scrollTarget && transcript.contains(conversation.scrollTarget)) revealMessage(conversation.scrollTarget)
+    else scrollport.scrollTop = conversation.scrollTop ?? 0
+  }
 
   function addMessage(role, content) {
     const message = document.createElement('li')
@@ -56,12 +125,13 @@ export function createWritingAssistant({ transcript, status, onChange, onReply }
     message.dataset.role = role
     const label = document.createElement('strong')
     label.textContent = role === 'user' ? '나' : 'AI'
-    const body = document.createElement('p')
-    body.textContent = content
+    const body = document.createElement('div')
+    body.className = 'assistant-message-body'
+    if (role === 'assistant') renderAssistantText(body, content)
+    else body.textContent = content
     message.append(label, body)
     transcript.append(message)
     transcript.hidden = false
-    transcript.scrollTop = transcript.scrollHeight
     return message
   }
 
@@ -71,6 +141,7 @@ export function createWritingAssistant({ transcript, status, onChange, onReply }
     const { history } = conversation
     const user = { role: 'user', content: message.trim() }
     const pending = addMessage('user', user.content)
+    revealMessage(pending)
     const turn = { controller, pending }
     active = turn
     status.textContent = 'AI가 답변을 작성하고 있어요.'
@@ -87,9 +158,10 @@ export function createWritingAssistant({ transcript, status, onChange, onReply }
       const response = parseReply(text, request.kind, result.truncated)
       history.push(user, { role: 'assistant', content: response.reply })
       if (history.length > assistantHistoryTurns * 2) history.splice(0, 2)
-      addMessage('assistant', response.reply)
+      const answer = addMessage('assistant', response.reply)
       status.textContent = result.truncated ? '출력 한도에 도달했어요. 답변을 확인해 주세요.' : ''
       onReply(response)
+      revealMessage(answer)
       return true
     } catch (error) {
       if (active === turn) {
@@ -116,6 +188,8 @@ export function createWritingAssistant({ transcript, status, onChange, onReply }
 
   return {
     send,
+    rememberScroll,
+    restoreScroll,
     get busy() { return Boolean(active) },
     stop() { active?.controller.abort() },
     useConversation(key) {
@@ -123,7 +197,7 @@ export function createWritingAssistant({ transcript, status, onChange, onReply }
       cancelPending()
       if (conversationKey) {
         conversation.messages = [...transcript.children]
-        conversation.scrollTop = transcript.scrollTop
+        rememberScroll()
         conversation.status = status.textContent
       }
       if (!conversations.has(key)) conversations.set(key, { history: [] })
@@ -132,13 +206,15 @@ export function createWritingAssistant({ transcript, status, onChange, onReply }
       transcript.replaceChildren(...(conversation.messages ?? []))
       conversation.messages = undefined
       transcript.hidden = !transcript.childElementCount
-      transcript.scrollTop = conversation.scrollTop ?? 0
+      restoreScroll()
       status.textContent = conversation.status ?? ''
       onChange()
     },
     reset() {
       cancelPending()
       conversation.history.length = 0
+      conversation.scrollTop = 0
+      conversation.scrollTarget = undefined
       transcript.replaceChildren()
       transcript.hidden = true
       status.textContent = ''
