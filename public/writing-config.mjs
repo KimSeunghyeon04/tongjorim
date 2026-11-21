@@ -1,3 +1,8 @@
+export const defaultSourceLimits = { manuscript: 18_000, pastPassages: 3_600 }
+export const maxSourceLimits = { manuscript: 80_000, pastPassages: 18_000 }
+export const sourceLimitsFor = project => project.sourceLimits ?? defaultSourceLimits
+export const validSourceLimit = (field, value) => Number.isInteger(value) && value >= 0 && value <= maxSourceLimits[field]
+
 export const writingFields = {
   projectTitle: 120,
   sceneTitle: 120,
@@ -5,14 +10,15 @@ export const writingFields = {
   characterNotes: 12000,
   worldNotes: 12000,
   previousScenes: 6500,
-  manuscript: 18000,
+  manuscript: maxSourceLimits.manuscript,
   manuscriptMemory: 8000,
   lorebook: 5000,
-  pastPassages: 3600,
+  pastPassages: maxSourceLimits.pastPassages,
   direction: 1200,
 }
 
 export const systemPromptLimit = 8000
+export const revisionParagraphLimit = 18_000
 export const modelIdPattern = /^[a-z0-9][a-z0-9_.-]*\/[a-z0-9][a-z0-9_.:+-]*$/i
 export const validModelId = value => typeof value === 'string' && value.length <= 200 && modelIdPattern.test(value)
 export const freeModel = { id: 'openrouter/free', name: 'Free Models Router', free: true, input: 0, output: 0, request: 0 }

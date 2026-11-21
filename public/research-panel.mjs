@@ -1,25 +1,11 @@
 import { embedPast } from './embedding-index.mjs'
-import { memoryForPrompt } from './manuscript-memory.mjs'
 import { defaultReferenceSettings, validLoreCard } from './project-files.mjs'
 import { actualUsage, combineUsage, estimateLabel, usageLabel } from './request-tools.mjs'
-import { activeLore, loreKinds, loreLimits, retrievalInput, searchFor, searchPast } from './retrieval.mjs'
-import { orderedWritingContext, projectNotesForRequest, referenceLabels, writingFieldPrefix, writingFields } from './writing-config.mjs'
+import { chunkManuscript, loreKinds, loreLimits, rankPast, retrievalInput, searchFor } from './retrieval.mjs'
+import { referenceLabels, sourceLimitsFor, writingFieldPrefix } from './writing-config.mjs'
+import { planWritingContext } from './writing-context.mjs'
 
-export const refsFor = project => project.references ?? defaultReferenceSettings()
-
-export function writingBody(project, references, lore, hits) {
-  return {
-    model: project.model, maxTokens: project.maxTokens, systemPrompt: project.systemPrompt, references,
-    draft: orderedWritingContext({
-      ...projectNotesForRequest(project),
-      direction: writingFieldPrefix('direction', project.direction),
-      manuscriptMemory: memoryForPrompt(project),
-      manuscript: project.manuscript.slice(-writingFields.manuscript),
-      lorebook: lore.text,
-      pastPassages: hits.map(hit => hit.block).join('\n\n'),
-    }, references),
-  }
-}
+const refsFor = project => project.references ?? defaultReferenceSettings()
 
 const element = (tag, label) => Object.assign(document.createElement(tag), { textContent: label })
 function action(label, title, click) {
@@ -33,6 +19,7 @@ function action(label, title, click) {
 
 export function setupResearch({ get, currentProject, saveWorkspace, onChange, goToPassage }) {
   const cache = new WeakMap()
+  const localSearch = new WeakMap()
   const cardForm = get('lore-form')
   let cardId
 
@@ -175,56 +162,69 @@ export function setupResearch({ get, currentProject, saveWorkspace, onChange, go
     if (cache.get(project)?.pending) forget(project)
   }
 
-  function cachedHits(project, references) {
-    const entry = cache.get(project)
-    if (entry && sameResearch(entry, project, references, searchFor(project))) return entry.hits
-    return undefined
+  function searchInput(project, references, cutoff, onlyCached = false) {
+    const manuscript = project.manuscript
+    const direction = writingFieldPrefix('direction', project.direction)
+    const recent = references.includes('manuscript')
+    let local = localSearch.get(project)
+    if (onlyCached) {
+      return local?.manuscript === manuscript && local.direction === direction && local.recent === recent
+        ? local.inputs.get(cutoff) : undefined
+    }
+    if (local?.manuscript !== manuscript) {
+      local = { manuscript, corpus: undefined }
+      localSearch.set(project, local)
+    }
+    if (local.direction !== direction || local.recent !== recent) {
+      Object.assign(local, { direction, recent, inputs: new Map() })
+    }
+    if (!local.inputs.has(cutoff)) {
+      if (cutoff > 0) local.corpus ??= chunkManuscript(manuscript)
+      const input = retrievalInput(manuscript, direction, recent, { cutoff, corpus: local.corpus })
+      if (local.inputs.size >= 4) local.inputs.delete(local.inputs.keys().next().value)
+      local.inputs.set(cutoff, input)
+    }
+    return local.inputs.get(cutoff)
   }
 
-  function startSearch(project, references, search) {
+  function startSearch(project, references, search, { chunks, query }) {
     forget(project)
     const controller = new AbortController()
     const entry = { ...search, manuscript: project.manuscript, direction: project.direction,
-      recent: references.includes('manuscript'), status: '관련 원문 찾는 중…', controller, pending: true, waiters: 0 }
+      recent: references.includes('manuscript'), chunkCount: chunks.length, status: '관련 원문 찾는 중…', controller, pending: true, waiters: 0 }
     cache.set(project, entry)
     const show = () => { if (project === currentProject()) renderState() }
     entry.promise = (async () => {
-      const { chunks, query, intent } = retrievalInput(entry.manuscript, writingFieldPrefix('direction', entry.direction), entry.recent)
-      let semantic
-      if (entry.enabled && chunks.length && query) {
-        try {
-          semantic = await embedPast(project.id, entry.model, chunks, query, controller.signal, estimate => {
-            entry.estimate = estimate
-            show()
-          }, usage => {
-            entry.usage = usage
-            show()
-          })
-          entry.status = '키워드 + 의미 검색'
-        } catch (error) {
-          controller.signal.throwIfAborted()
-          if (entry.estimate) entry.usage = combineUsage(entry.usage, actualUsage())
-          entry.status = `키워드 검색 · 의미 검색 실패 (${error.message})`
-        }
-      } else {
-        entry.status = entry.enabled ? '색인할 과거 원문 또는 검색어가 없어요.' : '키워드 검색'
+      try {
+        entry.semantic = await embedPast(project.id, entry.model, chunks, query, controller.signal, estimate => {
+          entry.estimate = estimate
+          show()
+        }, usage => {
+          entry.usage = usage
+          show()
+        })
+        entry.status = '키워드 + 의미 검색'
+      } catch (error) {
+        controller.signal.throwIfAborted()
+        if (entry.estimate) entry.usage = combineUsage(entry.usage, actualUsage())
+        entry.status = `키워드 검색 · 의미 검색 실패 (${error.message})`
       }
-      entry.hits = searchPast(chunks, query, semantic, intent)
       show()
-      return entry.hits
     })().finally(() => { entry.pending = false })
     show()
     return entry
   }
 
-  async function getHits(project, references, signal) {
+  async function ensureSearch(project, references, cutoff, signal) {
     signal.throwIfAborted()
-    if (!references.includes('pastPassages')) return []
     const search = searchFor(project)
+    if (!search.enabled || !cutoff) return
+    const input = searchInput(project, references, cutoff)
+    if (!input.chunks.length || !input.query) return
     const cached = cache.get(project)
-    const entry = cached && sameResearch(cached, project, references, search)
-      ? cached : startSearch(project, references, search)
-    if (!entry.pending) return entry.promise
+    const entry = cached && cached.chunkCount >= input.chunks.length && sameResearch(cached, project, references, search)
+      ? cached : startSearch(project, references, search, input)
+    if (!entry.pending) return entry
 
     entry.waiters++
     let onAbort
@@ -233,7 +233,8 @@ export function setupResearch({ get, currentProject, saveWorkspace, onChange, go
       signal.addEventListener('abort', onAbort, { once: true })
     })
     try {
-      return await Promise.race([entry.promise, cancelled])
+      await Promise.race([entry.promise, cancelled])
+      return entry
     } finally {
       signal.removeEventListener('abort', onAbort)
       entry.waiters--
@@ -244,15 +245,73 @@ export function setupResearch({ get, currentProject, saveWorkspace, onChange, go
     }
   }
 
-  async function prepare(project, signal) {
+  function rankedPast(input, semantic) {
+    if (!input?.chunks.length || !input.query) return []
+    if (!semantic) {
+      input.keyword ??= rankPast(input.chunks, input.query, undefined, input.intent)
+      return input.keyword
+    }
+    if (input.semantic !== semantic) {
+      input.semantic = semantic
+      input.combined = rankPast(input.chunks, input.query, semantic, input.intent)
+    }
+    return input.combined
+  }
+
+  function resolvePlan(project, plan, onlyCached) {
+    if (!plan.pastLimit || !plan.cutoff) return { ranked: () => [] }
+    const { references } = plan.body
+    const input = searchInput(project, references, plan.cutoff, onlyCached)
+    if (!input) return { ranked: () => [], pastPending: plan.canFitPast }
+    if (!input.chunks.length || !input.query) return { ranked: () => [] }
+    const search = searchFor(project)
+    const cached = cache.get(project)
+    const entry = search.enabled && cached && cached.chunkCount >= input.chunks.length && sameResearch(cached, project, references, search)
+      ? cached : undefined
+    const semanticPending = plan.canFitPast && search.enabled && (!entry || entry.pending)
+    return {
+      semanticPending,
+      semanticFailed: Boolean(plan.canFitPast && entry && !entry.pending && !entry.semantic),
+      ranked: keywordOnly => rankedPast(input, keywordOnly ? undefined : entry?.semantic),
+    }
+  }
+
+  function plansFor(project, model, limits = sourceLimitsFor(project)) {
     const references = refsFor(project).filter(ref => ref.enabled).map(ref => ref.key)
-    const direction = writingFieldPrefix('direction', project.direction)
-    const lore = references.includes('lorebook') ? activeLore(project.lorebook ?? [], project.manuscript, direction) : { text: '', included: [] }
-    const snapshot = writingBody(project, references, lore, [])
-    const hits = await getHits(project, references, signal)
+    return planWritingContext(project, references, model, limits)
+  }
+
+  function inspect(project, model, limits, { onlyCached = false } = {}) {
+    const saved = plansFor(project, model)
+    const next = limits ? plansFor(project, model, limits) : saved
+    const before = resolvePlan(project, saved, onlyCached)
+    const after = next === saved ? before : resolvePlan(project, next)
+    const semanticPending = Boolean(before.semanticPending || after.semanticPending)
+    const semanticFailed = Boolean(before.semanticFailed || after.semanticFailed)
+    const keywordOnly = semanticPending || semanticFailed
+    const current = saved.finish(before.ranked(keywordOnly))
+    return {
+      saved: current, draft: next === saved ? current : next.finish(after.ranked(keywordOnly)),
+      semanticPending, semanticFailed, pastPending: before.pastPending,
+    }
+  }
+
+  async function refreshSearch(project, model, limits, signal) {
+    const saved = plansFor(project, model)
+    const next = plansFor(project, model, limits)
+    if (resolvePlan(project, saved).semanticFailed || resolvePlan(project, next).semanticFailed) forget(project)
+    const cutoff = Math.max(saved.canFitPast ? saved.cutoff : 0, next.canFitPast ? next.cutoff : 0)
+    await ensureSearch(project, next.body.references, cutoff, signal)
+  }
+
+  async function prepare(project, model, signal) {
+    const plan = plansFor(project, model)
+    const { references } = plan.body
+    const input = plan.pastLimit && plan.cutoff ? searchInput(project, references, plan.cutoff) : undefined
+    const entry = plan.canFitPast ? await ensureSearch(project, references, plan.cutoff, signal) : undefined
     signal.throwIfAborted()
-    if (references.includes('pastPassages')) snapshot.draft.pastPassages = hits.map(hit => hit.block).join('\n\n')
-    return { body: snapshot, lore: lore.included, hits, status: get('search-state').textContent }
+    const status = entry?.status ?? (input?.chunks.length && input.query ? '키워드 검색' : '검색할 과거 원문 또는 검색어 없음')
+    return { ...plan.finish(rankedPast(input, entry?.semantic)), status }
   }
 
   function renderResults({ lore, hits, status, body }) {
@@ -308,5 +367,5 @@ export function setupResearch({ get, currentProject, saveWorkspace, onChange, go
     onChange()
     get('preview-request').click()
   })
-  return { render, renderState, prepare, renderResults, cachedHits }
+  return { render, renderState, prepare, renderResults, inspect, refreshSearch }
 }

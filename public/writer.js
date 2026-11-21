@@ -2,13 +2,14 @@ import { freeModel, requestCompletion, settingsChangeEvent } from './completion.
 import {
   appendParagraphs, completionPayload, defaultMemoryPrompt, defaultNoteSystemPrompt, defaultRevisionPrompt, defaultSystemPrompt,
   effectiveSystemPrompt, memoryOutputLimit, modelFor, normalizeLineEndings, noteIdeaLimit, noteKinds, projectNotesForRequest, referenceLabels,
-  systemPromptLimit, writingFieldPrefix, writingFields,
+  systemPromptLimit, writingFields,
 } from './writing-config.mjs'
 import { memoryForPrompt, memoryReadThrough, memoryRequest, setManuscriptText, updateManuscriptMemory } from './manuscript-memory.mjs'
 import { exportPack, exportProject, readPack, readProject } from './project-files.mjs'
 import { currentProjectOf, makeProject, mergeModelSettings, projectName, readWorkspace, storageKey } from './writing-workspace.mjs'
-import { refsFor, setupResearch, writingBody } from './research-panel.mjs'
-import { activeLore, paragraphRanges } from './retrieval.mjs'
+import { setupResearch } from './research-panel.mjs'
+import { setupSourcePanel } from './source-panel.mjs'
+import { paragraphRanges } from './retrieval.mjs'
 import { combineUsage, completionEstimate, estimateLabel, jsonRequest, usageLabel } from './request-tools.mjs'
 
 const get = id => document.getElementById(id)
@@ -269,22 +270,23 @@ function estimate(payload) {
 
 function renderEstimates() {
   const project = currentProject()
-  get('writing-model-name').textContent = models.find(model => model.id === project.model)?.name ?? project.model
-  const keys = refsFor(project).filter(ref => ref.enabled).map(ref => ref.key)
-  const direction = writingFieldPrefix('direction', project.direction)
-  const lore = keys.includes('lorebook') ? activeLore(project.lorebook ?? [], project.manuscript, direction) : { text: '' }
-  const hits = research.cachedHits(project, keys)
-  const { draft } = writingBody(project, keys, lore, hits ?? [])
-  const writing = completionPayload(project.model, project.maxTokens, effectiveSystemPrompt(project.systemPrompt, defaultSystemPrompt), draft)
-  get('writing-estimate').textContent = estimate(writing) + (!hits && keys.includes('pastPassages') &&
-    project.manuscript.length > writingFields.manuscript ? ' · 과거 원문 반영 전' : '')
+  const writingModel = catalogModel(project.model)
+  get('writing-model-name').textContent = writingModel?.name ?? project.model
+  const { saved, pastPending, semanticPending } = sourcePanel.render() ?? research.inspect(project, writingModel, undefined, { onlyCached: true })
+  const { draft } = saved.body
+  const pending = pastPending ? ' · 과거 원문 반영 전' : semanticPending ? ' · 의미 검색 반영 전' : ''
+  get('writing-estimate').textContent = estimateLabel(saved.usage) + pending
   const limitedFields = [
     ['projectTitle', project.title, '작품 제목'], ['direction', project.direction, '작가의 노트'],
     ...Object.keys(noteKinds).map(key => [key, project[key], referenceLabels[key]]),
   ].filter(([key, text]) => Object.hasOwn(draft, key) && text?.length > draft[key].length).map(([, , label]) => label)
   const limitNotice = get('writing-context-limit')
-  limitNotice.hidden = !limitedFields.length
-  limitNotice.textContent = limitedFields.length ? `요청 한도에 맞춰 ${limitedFields.join(', ')}의 앞부분을 보냅니다.` : ''
+  const limitNotes = []
+  if (limitedFields.length) limitNotes.push(`요청 한도에 맞춰 ${limitedFields.join(', ')}의 앞부분을 보냅니다.`)
+  if (saved.remaining < 0) limitNotes.push('모델 컨텍스트가 부족해요. 프롬프트, 참고 자료나 출력 한도를 줄여 주세요.')
+  else if (saved.recentReduced || saved.pastReduced) limitNotes.push('모델 컨텍스트에 맞춰 원문을 줄였어요.')
+  limitNotice.hidden = !limitNotes.length
+  limitNotice.textContent = limitNotes.join(' ')
 
   const paragraph = selectedRevision()
   const status = get('revision-selection')
@@ -335,6 +337,11 @@ function goToPassage({ start, end, text }) {
 }
 
 const research = setupResearch({ get, currentProject, saveWorkspace, onChange: writingInputsChanged, goToPassage })
+const catalogModel = id => models.find(model => model.id === id)
+const sourcePanel = setupSourcePanel({
+  get, currentProject, getModel: catalogModel, research, saveWorkspace, onSave: writingInputsChanged,
+  onSearch: renderEstimates, goToPassage,
+})
 
 async function showRequestPreview() {
   if (activePreview || activeRequest || activePlanRequest) return
@@ -349,7 +356,7 @@ async function showRequestPreview() {
   status.textContent = '전송할 내용을 준비하는 중이에요.'
   get('request-preview-title').focus()
   try {
-    const prepared = await research.prepare(project, controller.signal)
+    const prepared = await research.prepare(project, catalogModel(project.model), controller.signal)
     const payload = await jsonRequest('/api/write/preview', { body: prepared.body, signal: controller.signal })
     controller.signal.throwIfAborted()
     const blocks = [
@@ -401,7 +408,14 @@ async function generateDraft(revision) {
   proposalBody.replaceChildren(output)
 
   try {
-    const body = revision ? revisionBody(project, revision) : (await research.prepare(project, controller.signal)).body
+    let body
+    if (revision) {
+      body = revisionBody(project, revision)
+    } else {
+      const prepared = await research.prepare(project, catalogModel(project.model), controller.signal)
+      if (prepared.remaining < 0) throw new Error('모델 컨텍스트가 부족해요. 프롬프트, 참고 자료나 출력 한도를 줄여 주세요.')
+      body = prepared.body
+    }
     if (oneTimeNote !== undefined && body.draft.direction === oneTimeNote) preview.oneTimeNote = oneTimeNote
     const result = await requestCompletion(revision ? '/api/revise' : '/api/write', body, {
       signal: controller.signal,

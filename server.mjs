@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import {
   completionPayload, defaultMemoryPrompt, defaultNoteSystemPrompt, defaultRevisionPrompt, defaultSystemPrompt,
   defaultReferences, effectiveSystemPrompt, freeModel, memoryExcerptLimit, memoryOutputLimit, modelIdPattern, noteIdeaLimit,
-  noteKinds, orderedWritingContext, systemPromptLimit,
+  noteKinds, orderedWritingContext, revisionParagraphLimit, systemPromptLimit,
   writingFields, writingTokenLimits,
 } from './public/writing-config.mjs'
 import { actualUsage } from './public/request-tools.mjs'
@@ -35,6 +35,8 @@ const assets = new Map([
   ['/retrieval.mjs', ['retrieval.mjs', 'text/javascript; charset=utf-8']],
   ['/embedding-index.mjs', ['embedding-index.mjs', 'text/javascript; charset=utf-8']],
   ['/research-panel.mjs', ['research-panel.mjs', 'text/javascript; charset=utf-8']],
+  ['/writing-context.mjs', ['writing-context.mjs', 'text/javascript; charset=utf-8']],
+  ['/source-panel.mjs', ['source-panel.mjs', 'text/javascript; charset=utf-8']],
   ['/request-tools.mjs', ['request-tools.mjs', 'text/javascript; charset=utf-8']],
   ['/project-files.mjs', ['project-files.mjs', 'text/javascript; charset=utf-8']],
   ['/completion.js', ['completion.js', 'text/javascript; charset=utf-8']],
@@ -70,6 +72,10 @@ function modelPrice(value) {
   return String(value).trim() && Number.isFinite(price) && price >= 0 ? price : null
 }
 
+function tokenLimit(value) {
+  return Number.isSafeInteger(value) && value > 0 ? value : null
+}
+
 let cachedModels
 async function modelCatalog() {
   if (cachedModels?.expires > Date.now()) return cachedModels.result
@@ -85,7 +91,11 @@ async function modelCatalog() {
         const input = modelPrice(model.pricing?.prompt)
         const output = modelPrice(model.pricing?.completion)
         const request = model.pricing?.request == null ? 0 : modelPrice(model.pricing.request)
-        return { id: model.id, name: model.name, input, output, request, free: input === 0 && output === 0 && request === 0 }
+        const contextLimits = [model.context_length, model.top_provider?.context_length].map(tokenLimit).filter(Boolean)
+        const contextLength = contextLimits.length ? Math.min(...contextLimits) : null
+        const maxCompletionTokens = tokenLimit(model.top_provider?.max_completion_tokens)
+        return { id: model.id, name: model.name, input, output, request, contextLength, maxCompletionTokens,
+          free: input === 0 && output === 0 && request === 0 }
       })
       .sort((a, b) => a.name.localeCompare(b.name))
     const result = { models: [freeModel, ...models], catalogAvailable: true }
@@ -139,7 +149,7 @@ function resolveSystemPrompt(prompt, fallback) {
 }
 
 async function readWritingRequest(req) {
-  const { model, maxTokens, draft, systemPrompt, references } = (await readJsonRequest(req, 512 * 1024)) ?? {}
+  const { model, maxTokens, draft, systemPrompt, references } = (await readJsonRequest(req, 1024 * 1024)) ?? {}
   const context = Object.fromEntries(Object.keys(writingFields).map(field => [field, draft?.[field]]))
   context.characterNotes ??= ''
   context.manuscriptMemory ??= ''
@@ -198,7 +208,7 @@ async function readRevisionRequest(req) {
   const { model, maxTokens, paragraph, direction, systemPrompt } = (await readJsonRequest(req)) ?? {}
   if (typeof model !== 'string' || model.length > 200 || !modelIdPattern.test(model) ||
       !writingTokenLimits.includes(maxTokens) ||
-      typeof paragraph !== 'string' || !paragraph.trim() || paragraph.length > writingFields.manuscript ||
+      typeof paragraph !== 'string' || !paragraph.trim() || paragraph.length > revisionParagraphLimit ||
       typeof direction !== 'string' || direction.length > writingFields.direction) {
     throw new RequestError(400, '퇴고할 문단과 지시를 확인해 주세요.')
   }

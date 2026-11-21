@@ -130,6 +130,36 @@
           <p class="field-hint" id="writing-estimate"></p>
           <p class="field-hint" id="writing-context-limit" role="status" hidden></p>
         </div>
+        <details class="note-planner" id="source-settings">
+          <summary>원문 분량 설정</summary>
+          <div class="memory-controls source-settings">
+            <div class="source-row">
+              <label for="source-manuscript">최근 원고 상한</label>
+              <span><input class="writing-field" id="source-manuscript" inputmode="numeric" maxlength="5" autocomplete="off" aria-describedby="source-saved-manuscript source-manuscript-status"> 자</span>
+              <p class="field-hint source-row-summary"><strong id="source-saved-manuscript"></strong> <span id="source-manuscript-status"></span></p>
+              <div class="source-passage" id="source-recent-passage" hidden></div>
+            </div>
+            <div class="source-row">
+              <label for="source-pastPassages">과거 원문 상한</label>
+              <span><input class="writing-field" id="source-pastPassages" inputmode="numeric" maxlength="5" autocomplete="off" aria-describedby="source-saved-pastPassages source-pastPassages-status"> 자</span>
+              <p class="field-hint source-row-summary"><strong id="source-saved-pastPassages"></strong> <span id="source-pastPassages-status"></span></p>
+              <ul class="source-passage" id="source-past-hits" hidden></ul>
+            </div>
+            <dl class="source-metrics" id="source-metrics">
+              <dt>원문 예산</dt><dd id="source-budget"></dd>
+              <dt>남는 컨텍스트</dt><dd id="source-remaining"></dd>
+              <dt>회당 예상 비용</dt><dd id="source-cost"></dd>
+            </dl>
+            <p class="field-hint" id="source-context-note"></p>
+            <p class="field-hint" id="source-search-status" role="status" hidden></p>
+            <div class="compact-actions">
+              <button class="outline-button" id="save-source-limits" type="button" disabled>분량 저장</button>
+              <button class="quiet-button" id="reset-source-limits" type="button" hidden>편집 취소</button>
+              <button class="quiet-button" id="refresh-source-search" type="button" hidden>의미 검색 반영</button>
+            </div>
+            <p class="field-hint" id="source-save-status" role="status" hidden></p>
+          </div>
+        </details>
         <div class="memory-shortcut">
           <button class="quiet-button" id="open-memory" type="button">원고 메모</button>
           <p class="field-hint" id="memory-short-status" role="status"></p>

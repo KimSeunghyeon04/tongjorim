@@ -1,5 +1,6 @@
 const number = new Intl.NumberFormat('ko-KR')
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 8 })
+export const formatCost = value => value == null ? '확인 불가' : usd.format(value)
 
 export function estimateUsage(input, output, model, requests = 1) {
   const bytes = new TextEncoder()
@@ -33,12 +34,12 @@ export function combineUsage(before, after) {
 }
 
 export function estimateLabel({ inputTokens, outputTokens, cost }) {
-  return `추정 입력 ${number.format(inputTokens)}토큰 · 출력 한도 ${number.format(outputTokens)}토큰 · 비용 ${cost == null ? '확인 불가' : usd.format(cost)}`
+  return `추정 입력 ${number.format(inputTokens)}토큰 · 출력 한도 ${number.format(outputTokens)}토큰 · 비용 ${formatCost(cost)}`
 }
 
 export function usageLabel(usage) {
   const format = value => value == null ? '확인 불가' : number.format(value)
-  return `실제 입력 ${format(usage?.inputTokens)} · 출력 ${format(usage?.outputTokens)} · 총 토큰 ${format(usage?.totalTokens)} · 비용 ${usage?.cost == null ? '확인 불가' : usd.format(usage.cost)}`
+  return `실제 입력 ${format(usage?.inputTokens)} · 출력 ${format(usage?.outputTokens)} · 총 토큰 ${format(usage?.totalTokens)} · 비용 ${formatCost(usage?.cost)}`
 }
 
 export async function jsonRequest(path, { body, signal } = {}) {

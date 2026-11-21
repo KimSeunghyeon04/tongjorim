@@ -1,5 +1,5 @@
 import { loreKinds, loreLimits } from './retrieval.mjs'
-import { defaultReferences, normalizeLineEndings, noteKinds, optionalProjectModels, systemPromptLimit, validModelId, writingFields, writingTokenLimits } from './writing-config.mjs'
+import { defaultReferences, maxSourceLimits, normalizeLineEndings, noteKinds, optionalProjectModels, systemPromptLimit, validModelId, validSourceLimit, writingFields, writingTokenLimits } from './writing-config.mjs'
 
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value)
 const optional = (value, validate) => value === undefined || validate(value)
@@ -11,7 +11,7 @@ const pick = (value, keys) => Object.fromEntries(keys.filter(key => Object.hasOw
 const promptKeys = ['systemPrompt', 'notePrompts', 'references', 'authorMode']
 const projectKeys = [
   'title', 'synopsis', 'characterNotes', 'worldNotes', 'model', 'maxTokens', 'manuscript', 'direction', 'legacySceneNotes',
-  'manuscriptMemory', 'autoMemory', 'lorebook', 'search', ...optionalProjectModels, ...promptKeys,
+  'manuscriptMemory', 'autoMemory', 'lorebook', 'search', 'sourceLimits', ...optionalProjectModels, ...promptKeys,
 ]
 const cardKeys = ['id', 'name', 'aliases', 'kind', 'description', 'priority', 'always']
 
@@ -60,6 +60,8 @@ export function validProjectBase(project) {
 export function validProject(project) {
   if (!validProjectBase(project) || typeof project.manuscript !== 'string' || typeof project.direction !== 'string') return false
   return optional(project.autoMemory, validBoolean) && optional(project.lorebook, validLore) &&
+    optional(project.sourceLimits, limits => record(limits) &&
+      Object.keys(maxSourceLimits).every(field => validSourceLimit(field, limits[field]))) &&
     optionalProjectModels.every(key => optional(project[key], validModelId)) &&
     optional(project.search, value => record(value) && validBoolean(value.enabled) && validModelId(value.model)) &&
     optional(project.legacySceneNotes, notes => Array.isArray(notes) && notes.every(hasSceneNote)) &&
@@ -85,6 +87,7 @@ function clean(source, keys) {
   if (result.lorebook) result.lorebook = result.lorebook.map(card => pick(card, cardKeys))
   if (result.references) result.references = result.references.map(ref => pick(ref, ['key', 'enabled']))
   if (result.search) result.search = pick(result.search, ['enabled', 'model'])
+  if (result.sourceLimits) result.sourceLimits = pick(result.sourceLimits, Object.keys(maxSourceLimits))
   if (result.manuscriptMemory) result.manuscriptMemory = pick(result.manuscriptMemory, ['text', 'through', 'stale'])
   if (result.legacySceneNotes) result.legacySceneNotes = result.legacySceneNotes.map(note => pick(note, ['title', 'direction']))
   return result

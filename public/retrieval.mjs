@@ -1,4 +1,4 @@
-import { writingFields } from './writing-config.mjs'
+import { defaultSourceLimits, writingFields } from './writing-config.mjs'
 
 export const loreKinds = { character: '인물', place: '장소', event: '사건', clue: '복선' }
 export const defaultEmbeddingModel = 'qwen/qwen3-embedding-4b'
@@ -7,6 +7,7 @@ export const embeddingBatchSize = 16
 export const embeddingQueryLimit = 2400
 export const chunkLimit = 900
 export const loreLimits = { cards: 150, names: 100, aliases: 16, description: 1800 }
+const loreMatchWindow = 18_000
 
 const wordBoundary = '[\\p{L}\\p{M}\\p{N}]'
 const koreanParticle = '(?:은|는|이|가|을|를|의|에|에서|에게|에게서|한테|한테서|께|께서|와|과|랑|이랑|하고|도|만|부터|까지|으로|로|로부터|으로부터|처럼|보다|마저|조차|뿐|이라고|라고|라며|이며|이다)'
@@ -19,7 +20,7 @@ function includesAlias(text, alias) {
 }
 
 export function activeLore(cards, manuscript, direction) {
-  const text = normalize(`${manuscript.slice(-writingFields.manuscript)}\n${direction}`)
+  const text = normalize(`${manuscript.slice(-loreMatchWindow)}\n${direction}`)
   const matches = cards.flatMap(card => {
     const keywords = [...new Set([card.name, ...card.aliases])].filter(alias => includesAlias(text, alias))
     if (!card.always && !keywords.length) return []
@@ -88,7 +89,9 @@ export function chunkManuscript(manuscript) {
   })
 }
 
-export function retrievalInput(manuscript, direction, includeRecent) {
+export function retrievalInput(manuscript, direction, includeRecent, {
+  cutoff = manuscript.length - defaultSourceLimits.manuscript, corpus,
+} = {}) {
   const recentLimit = 240
   const intent = direction.trim().slice(0, embeddingQueryLimit - recentLimit - 1)
   let recent = ''
@@ -99,8 +102,7 @@ export function retrievalInput(manuscript, direction, includeRecent) {
     }
   }
   const query = [intent, recent].filter(Boolean).join('\n')
-  const cutoff = manuscript.length - writingFields.manuscript
-  const chunks = cutoff > 0 ? chunkManuscript(manuscript).filter(chunk => chunk.end <= cutoff) : []
+  const chunks = cutoff > 0 ? (corpus ?? chunkManuscript(manuscript)).filter(chunk => chunk.end <= cutoff) : []
   return { query, intent, chunks }
 }
 
@@ -170,7 +172,7 @@ export function cosine(left, right) {
   return normLeft && normRight ? dot / Math.sqrt(normLeft * normRight) : -1
 }
 
-export function searchPast(chunks, query, semantic, intent = '') {
+export function rankPast(chunks, query, semantic, intent = '') {
   const keyword = keywordRanking(chunks, query, intent)
   const meaning = semantic ? chunks.map((chunk, index) => ({
     chunk, index, score: cosine(semantic.query, semantic.vectors[index]),
@@ -186,18 +188,27 @@ export function searchPast(chunks, query, semantic, intent = '') {
     })
   }
 
-  const result = []
-  let used = 0
-  const ranked = Array.from(scores.values()).sort((a, b) =>
+  return Array.from(scores.values()).sort((a, b) =>
     Number(b.exactMatch) - Number(a.exactMatch) || b.score - a.score || a.start - b.start)
+}
+
+export function selectPast(ranked, limit = defaultSourceLimits.pastPassages, fits = () => true) {
+  const result = []
+  const defaultHitLimit = 3
+  const hitLimit = Math.max(defaultHitLimit, Math.ceil(limit / (defaultSourceLimits.pastPassages / defaultHitLimit)))
+  let text = ''
   for (const hit of ranked) {
-    if (result.length === 3) break
+    if (result.length === hitLimit) break
     if (result.some(item => item.start < hit.end && item.end > hit.start)) continue
     const block = `[원고 ${hit.start + 1}–${hit.end}자]\n${hit.text}`
-    const added = block.length + (used ? 2 : 0)
-    if (used + added > writingFields.pastPassages) continue
+    const candidate = text ? `${text}\n\n${block}` : block
+    if (candidate.length > limit || !fits(candidate)) continue
     result.push({ ...hit, block })
-    used += added
+    text = candidate
   }
-  return result
+  return { hits: result, text }
+}
+
+export function searchPast(chunks, query, semantic, intent = '') {
+  return selectPast(rankPast(chunks, query, semantic, intent)).hits
 }

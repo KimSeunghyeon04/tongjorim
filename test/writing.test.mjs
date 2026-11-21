@@ -1,11 +1,59 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { exportPack, exportProject, readPack, readProject } from '../public/project-files.mjs'
-import { activeLore, chunkManuscript, retrievalInput, searchPast } from '../public/retrieval.mjs'
+import { activeLore, chunkManuscript, rankPast, retrievalInput, searchPast } from '../public/retrieval.mjs'
 import { actualUsage, combineUsage, estimateUsage } from '../public/request-tools.mjs'
-import { projectNotesForRequest, writingFieldPrefix } from '../public/writing-config.mjs'
+import { planWritingContext } from '../public/writing-context.mjs'
+import { projectNotesForRequest, sourceLimitsFor, writingFieldPrefix } from '../public/writing-config.mjs'
 import { mergeModelSettings } from '../public/writing-workspace.mjs'
 import { manuscript, passages, queries } from '../scripts/retrieval-fixture.mjs'
+
+test('원문 한도와 검색 범위, 출력 예약을 뺀 컨텍스트와 비용이 함께 바뀐다', () => {
+  const project = {
+    title: '', direction: '', manuscript: `earlier\n\n${'A'.repeat(35)}🧭`, model: 'qa/write', maxTokens: 1024, systemPrompt: 's',
+  }
+  const model = { contextLength: 1180, input: 0.001, output: 0.002, request: 0.003 }
+  const refs = ['manuscript', 'pastPassages']
+  const limits = { manuscript: 99, pastPassages: 99 }
+  const large = planWritingContext(project, refs, model, limits)
+  const getRank = plan => {
+    const { chunks, query, intent } = retrievalInput(project.manuscript, 'earlier', true, { cutoff: plan.cutoff })
+    return rankPast(chunks, query, undefined, intent)
+  }
+  const fitted = large.finish(getRank(large))
+  // System message costs 2 tokens. The empty user message is 73 ASCII bytes.
+  // Reserving 1,024 output and 128 spare leaves 28 input tokens, so the user message can grow to 104 bytes.
+  assert.equal(fitted.body.draft.manuscript, `${'A'.repeat(27)}🧭`)
+  assert.equal(fitted.cutoff, 17)
+  assert.equal(fitted.originalBudget, 7)
+  assert.equal(fitted.remaining, 0)
+  assert.equal(fitted.recentReduced, true)
+  assert.equal(fitted.pastReduced, true)
+  assert.deepEqual(fitted.hits, [])
+
+  const small = planWritingContext(project, refs, model, { manuscript: 2, pastPassages: 16 })
+  const before = small.finish(getRank(small))
+  assert.equal(before.body.draft.manuscript, '🧭')
+  assert.equal(before.remaining, 6)
+  assert.equal(before.body.draft.pastPassages, '')
+  const expanded = planWritingContext(project, refs, model, { manuscript: 2, pastPassages: 17 })
+  const after = expanded.finish(getRank(expanded))
+  assert.equal(after.body.draft.pastPassages, '[원고 1–7자]\nearlier')
+  assert.deepEqual(after.hits.map(({ start, end }) => [start, end]), [[0, 7]])
+  assert.equal(after.usage.inputTokens, 28)
+  assert.equal(after.remaining, 0)
+  assert.equal(Number((after.usage.cost - before.usage.cost).toFixed(6)), 0.006)
+})
+
+test('원문 설정은 작품 백업에서 복원되고 기존 프로젝트에는 기본값을 쓴다', () => {
+  const project = { id: 'original', title: '저편', synopsis: '', worldNotes: '', model: 'qa/write', maxTokens: 1024,
+    direction: '', manuscript: '' }
+  assert.deepEqual(sourceLimitsFor(project), { manuscript: 18_000, pastPassages: 3_600 })
+  const sourceLimits = { manuscript: 80_000, pastPassages: 0 }
+  const restore = limits => readProject(JSON.stringify(exportProject({ ...project, sourceLimits: limits })))
+  assert.deepEqual(restore(sourceLimits).sourceLimits, sourceLimits)
+  assert.throws(() => restore({ ...sourceLimits, manuscript: 80_001 }), /형식/)
+})
 
 test('한국어 로어북 조사와 이름 경계, 별칭, 우선순위와 입력 한도', () => {
   const card = { id: '1', kind: 'character', name: '나래', aliases: ['종잡이'], description: '문지기', priority: 31, always: false }
