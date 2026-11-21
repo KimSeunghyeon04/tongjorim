@@ -9,7 +9,7 @@
 .writer ::selection { color: #222d91; background: #e2e6ff; }
 .writer textarea, .writer input { caret-color: var(--accent); }
 .writer .outline-button { min-height: 38px; }
-.proposal-body:focus-visible, .writing-field:focus-visible {
+.writing-field:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -145,7 +145,14 @@
 .workspace-tabs button[aria-selected="true"] { border-bottom-color: var(--accent); color: var(--accent); }
 .workspace-tabs button:focus-visible { outline-offset: -3px; }
 .manuscript-view { display: flex; flex: 1; flex-direction: column; min-height: 0; }
-.manuscript-inner { flex: 1; min-height: 0; overflow: auto; padding: 22px var(--workspace-gutter) 28px; }
+.manuscript-inner {
+  display: grid;
+  grid-template-rows: auto minmax(min-content, 1fr);
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: clamp(14px, 2.2vh, 22px) var(--workspace-gutter) clamp(16px, 2.65vh, 28px);
+}
 .manuscript-composer {
   display: grid;
   flex: none;
@@ -153,6 +160,11 @@
   padding: 12px var(--workspace-gutter) 14px;
   border-top: 1px solid var(--line);
   background: var(--paper);
+}
+.manuscript-composer-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 10rem;
+  gap: 12px;
 }
 .writer .manuscript-composer textarea.writing-field { min-height: 62px; max-height: 140px; }
 .manuscript-composer-actions, .manuscript-author-mode, .manuscript-composer-meta {
@@ -200,7 +212,8 @@
   line-height: 1.55;
 }
 .paper {
-  min-height: 460px;
+  display: grid;
+  grid-template-rows: auto minmax(var(--manuscript-line-height), 1fr);
   padding: 27px clamp(20px, 3.6vw, 51px) 35px;
   border: 1px solid var(--paper-line);
   border-radius: 12px;
@@ -219,7 +232,9 @@
   font-variant-numeric: tabular-nums;
 }
 .manuscript-editor {
+  position: relative;
   display: grid;
+  grid-template-rows: minmax(0, 1fr);
   grid-template-columns: calc(var(--line-number-digits, 1) * 1ch + 16px) minmax(0, 1fr);
   gap: 12px;
 }
@@ -260,7 +275,7 @@
 }
 .manuscript::placeholder { color: #646e86; opacity: 1; }
 .manuscript:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
-.manuscript, .manuscript-lines, .proposal-body, .revision-text {
+.manuscript, .manuscript-lines, .revision-text {
   font-family: var(--manuscript-font);
   font-size: 17px;
   line-height: var(--manuscript-line-height);
@@ -268,25 +283,18 @@
   overflow-wrap: anywhere;
 }
 .manuscript {
-  min-height: 365px;
-  max-height: 62vh;
+  position: absolute;
+  grid-column: 2;
+  grid-row: 1;
+  inset: 0;
+  height: 100%;
   padding: 0;
-  field-sizing: content;
-  resize: vertical;
-}
-.writing-proposal {
-  margin-top: 14px;
-  padding: 16px 20px;
-  background: #f7f7ff;
-  border: 1px solid #d4d8f5;
-  border-radius: 12px;
+  resize: none;
 }
 .proposal-header { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; }
 .proposal-header h2 { font-size: 16px; letter-spacing: -.02em; }
 .proposal-header span { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
 .proposal-status { margin: 7px 0 10px; color: #4c5575; font-size: 13px; line-height: 1.55; }
-.proposal-body { max-height: 310px; overflow: auto; white-space: pre-wrap; padding-block: 9px; border-block: 1px solid #dfe2f5; }
-.proposal-actions { display: flex; align-items: center; justify-content: end; gap: 8px; margin-top: 10px; scroll-margin-block: 16px; }
 .revision-dialog {
   width: min(1120px, calc(100% - 24px));
   height: min(620px, calc(100% - 24px));
@@ -421,7 +429,6 @@
 .evidence-list li { margin-top: 4px; overflow-wrap: anywhere; font-size: 13px; }
 .evidence-list li p { white-space: pre-wrap; line-height: 1.55; }
 .evidence-list button { text-align: left; padding-inline: 0; }
-.proposal-metrics { margin-bottom: 6px; }
 .files-dialog { width: min(480px, calc(100% - 24px)); margin: auto; padding: 20px; border: 1px solid var(--line); border-radius: 12px; background: var(--chrome); color: var(--ink); }
 .files-dialog::backdrop { background: rgb(34 44 68 / 32%); }
 .file-section { padding-top: 12px; margin-top: 10px; border-top: 1px solid var(--line); }

@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8">
-  <title>통조림 집필실</title>
+  <title>통조림</title>
   <link rel="icon" type="image/png" sizes="64x64" href="/favicon.png">
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/writer.css">
@@ -65,35 +65,24 @@
             <div class="paper-label"><label for="manuscript">원고</label><span id="character-count"></span></div>
             <div class="manuscript-editor">
               <div class="manuscript-gutter" aria-hidden="true"><div id="manuscript-lines" class="manuscript-lines"></div></div>
-              <textarea id="manuscript" class="manuscript" placeholder="첫 문장을 쓰거나, 이어쓰기 지시로 소설을 시작하세요." rows="8" spellcheck="false"></textarea>
+              <textarea id="manuscript" class="manuscript" placeholder="첫 문장을 쓰거나, 이어쓰기 지시로 소설을 시작하세요." spellcheck="false"></textarea>
             </div>
           </div>
-
-          <section class="writing-proposal" id="proposal" aria-labelledby="proposal-title" hidden>
-            <div class="proposal-header">
-              <h2 id="proposal-title" tabindex="-1">이어쓰기 초안</h2>
-              <span id="proposal-model"></span>
-            </div>
-            <p class="proposal-status" id="proposal-status" role="status"></p>
-            <p class="field-hint proposal-metrics" id="proposal-usage" hidden></p>
-            <div class="proposal-body" id="proposal-body" tabindex="0" aria-label="생성된 원고" hidden></div>
-            <div class="proposal-actions" id="proposal-actions">
-              <button class="outline-button" id="proposal-stop" type="button" hidden>
-                <span class="icon-stop" aria-hidden="true"></span> 생성 중지
-              </button>
-              <button type="button" class="quiet-button" id="proposal-discard">초안 닫기</button>
-              <button type="button" class="writing-primary" id="proposal-accept">원고에 추가</button>
-            </div>
-          </section>
         </div>
         <form class="manuscript-composer" id="manuscript-composer" aria-label="이어쓰기">
-          <div class="writing-input">
-            <label for="direction">작가의 노트</label>
-            <textarea class="writing-field" id="direction" rows="2" maxlength="1200" placeholder="누가 등장하고 어떤 일이 일어날지 적어 주세요."></textarea>
+          <div class="manuscript-composer-fields">
+            <div class="writing-input">
+              <label for="direction">작가의 노트</label>
+              <textarea class="writing-field" id="direction" rows="2" maxlength="1200" placeholder="누가 등장하고 어떤 일이 일어날지 적어 주세요."></textarea>
+            </div>
+            <div class="writing-input">
+              <label for="scene-length">장면 분량</label>
+              <input class="writing-field" id="scene-length" type="text" placeholder="예: 1,500자 안팎" autocomplete="off">
+            </div>
           </div>
           <div class="manuscript-composer-actions">
             <div class="manuscript-author-mode">
-              <label for="author-mode">적용 범위</label>
+              <label for="author-mode">노트 적용 범위</label>
               <select class="writing-field" id="author-mode">
                 <option value="persistent">계속 적용</option>
                 <option value="once">이번 분량에만 적용</option>
@@ -102,11 +91,13 @@
             <div class="compact-actions">
               <button class="outline-button" id="edit-manuscript-prompt" type="button" aria-haspopup="dialog" aria-controls="prompt-dialog">프롬프트 편집</button>
               <button class="writing-primary" id="generate" type="submit" aria-describedby="writing-context-limit">이어서 쓰기</button>
+              <button class="outline-button" id="stop-writing" type="button" hidden>생성 중지</button>
             </div>
           </div>
           <div class="manuscript-composer-meta">
             <p class="field-hint" id="writing-model-name"></p>
             <p class="field-hint" id="writing-estimate"></p>
+            <p class="field-hint" id="writing-status" role="status"></p>
           </div>
           <p class="field-hint" id="writing-context-limit" role="status" hidden></p>
         </form>
@@ -378,7 +369,7 @@
         <div class="revision-text" id="revision-proposal-body" tabindex="0" role="region" aria-label="퇴고안 본문"></div>
       </section>
     </div>
-    <footer class="revision-dialog-actions" id="revision-proposal-actions">
+    <footer class="revision-dialog-actions">
       <button type="button" class="outline-button" id="revision-proposal-stop" hidden>생성 중지</button>
       <button type="button" class="quiet-button" id="revision-proposal-discard">닫기</button>
       <button type="button" class="writing-primary" id="revision-proposal-accept" disabled>이 문단 교체</button>

@@ -219,7 +219,7 @@ function writingCompletion({ model, maxTokens, draft, systemPrompt, references }
     throw new RequestError(400, '모델, 생성 한도와 원고 설정을 확인해 주세요.')
   }
   const prompt = resolveSystemPrompt(systemPrompt, defaultSystemPrompt)
-  if (!Object.entries(included).some(([field, text]) => field !== 'projectTitle' && text.trim())) {
+  if (!Object.entries(included).some(([field, text]) => field !== 'projectTitle' && field !== 'sceneLength' && text.trim())) {
     throw new RequestError(400, '원고, 작품 메모, 또는 이어쓰기 지시를 먼저 입력해 주세요.')
   }
 

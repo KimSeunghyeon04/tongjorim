@@ -17,9 +17,10 @@ function suffixAt(text, length) {
 export function planWritingContext(project, references, model, limits) {
   const { manuscript, maxTokens, systemPrompt } = project
   const direction = writingFieldPrefix('direction', project.direction)
+  const sceneLength = writingFieldPrefix('sceneLength', (project.sceneLength ?? '').trim())
   const lore = references.includes('lorebook') ? activeLore(project.lorebook ?? [], manuscript, direction) : { text: '', included: [] }
   const draft = orderedWritingContext({
-    ...projectNotesForRequest(project), direction, manuscriptMemory: memoryForPrompt(project),
+    ...projectNotesForRequest(project), direction, sceneLength, manuscriptMemory: memoryForPrompt(project),
     lorebook: lore.text, manuscript: '', pastPassages: '',
   }, references)
   const contextLength = model?.contextLength ?? null

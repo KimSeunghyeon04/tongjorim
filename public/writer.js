@@ -16,21 +16,6 @@ import { combineUsage, completionEstimate, estimateLabel, jsonRequest, usageLabe
 
 const get = id => document.getElementById(id)
 
-function proposalView(id) {
-  return {
-    section: get(id),
-    title: get(`${id}-title`),
-    model: get(`${id}-model`),
-    status: get(`${id}-status`),
-    usage: get(`${id}-usage`),
-    body: get(`${id}-body`),
-    actions: get(`${id}-actions`),
-    stop: get(`${id}-stop`),
-    discard: get(`${id}-discard`),
-    accept: get(`${id}-accept`),
-  }
-}
-
 const projectSelect = get('project-select')
 const manuscript = get('manuscript')
 const manuscriptLines = get('manuscript-lines')
@@ -52,8 +37,19 @@ const noteFields = {
   'world-notes': 'worldNotes',
 }
 const generate = get('generate')
-const continuationProposal = proposalView('proposal')
-const revisionProposal = proposalView('revision-proposal')
+const stopWriting = get('stop-writing')
+const writingStatus = get('writing-status')
+const revisionProposal = {
+  section: get('revision-proposal'),
+  title: get('revision-proposal-title'),
+  model: get('revision-proposal-model'),
+  status: get('revision-proposal-status'),
+  usage: get('revision-proposal-usage'),
+  body: get('revision-proposal-body'),
+  stop: get('revision-proposal-stop'),
+  discard: get('revision-proposal-discard'),
+  accept: get('revision-proposal-accept'),
+}
 const notePlanner = get('note-planner')
 const manuscriptTab = get('manuscript-tab')
 const noteWorkspaceTab = get('note-workspace-tab')
@@ -80,8 +76,7 @@ const memoryStop = get('memory-stop')
 const memoryStatus = get('memory-status')
 const memoryText = get('memory-text')
 const formatNumber = new Intl.NumberFormat('ko-KR')
-const continuationPreviews = new Map()
-let revisionPreview
+let revisionDraft
 const plans = new WeakMap()
 const memoryJobs = new WeakMap()
 let models = [freeModel]
@@ -284,6 +279,7 @@ function renderWorkspace() {
   manuscript.value = project.manuscript
   manuscript.scrollTop = manuscript.scrollHeight
   get('direction').value = project.direction
+  get('scene-length').value = project.sceneLength ?? ''
   get('author-mode').value = project.authorMode ?? 'persistent'
   for (const [id, key] of Object.entries(noteFields)) {
     get(id).value = project[key] ?? ''
@@ -291,7 +287,7 @@ function renderWorkspace() {
   }
   renderLegacySceneNotes(project.legacySceneNotes)
   updateCharacterCount()
-  renderContinuationProposal()
+  writingStatus.textContent = ''
   renderPlanner()
   renderMemory()
   research.render()
@@ -307,47 +303,30 @@ function syncControls() {
   for (const id of ['preview-request', 'preview-semantic-search', 'retry-search']) {
     get(id).disabled = busy || Boolean(activePreview)
   }
-  generate.textContent = activeRequest?.view === continuationProposal ? '생성 중…' : '이어서 쓰기'
+  const writing = Boolean(activeRequest && !activeRequest.revision)
+  generate.hidden = writing
+  stopWriting.hidden = !writing
   get('generate-revision').disabled = busy || !selectedRevision()
   updatePlanControls()
 }
 
-function renderContinuationProposal() {
-  const preview = continuationPreviews.get(currentProject().id)
-  continuationProposal.section.hidden = !preview
-  if (preview) renderProposal(continuationProposal, preview)
-}
-
-function renderProposal(view, preview) {
+function renderRevisionProposal(preview) {
+  const view = revisionProposal
   view.model.textContent = preview.model
   view.usage.hidden = !preview.usage
   view.usage.textContent = preview.usage ? usageLabel(preview.usage) : ''
-  if (!preview.revision) view.body.hidden = !preview.text.trim()
   if (view.body.textContent !== preview.text) view.body.textContent = preview.text
-  updateProposalActions(view, preview)
-}
-
-function updateProposalActions(view, preview) {
   const changed = currentProject().manuscript !== preview.original
-  const pending = activeRequest?.view === view ? activeRequest.preview : undefined
-  let status = preview.retryStatus ?? preview.status
-  if (pending && pending !== preview) {
-    status = `${pending.status} 아래는 이전 초안이에요.`
-  } else if (changed) {
-    const stale = '생성 요청 후 원고가 바뀌었어요. 다시 요청해 주세요.'
-    status = preview.retryStatus ? `${status} ${stale}` : stale
-  }
+  const pending = Boolean(activeRequest?.revision)
+  const status = changed ? '생성 요청 후 원고가 바뀌었어요. 다시 요청해 주세요.' : preview.status
   if (view.status.textContent !== status) view.status.textContent = status
-  const hideActions = !preview.revision && Boolean(pending)
-  view.accept.hidden = hideActions
-  view.accept.disabled = Boolean(pending) || changed || !preview.text.trim() || (Boolean(preview.revision) && !preview.complete)
-  view.discard.hidden = hideActions
+  view.accept.disabled = pending || changed || !preview.text.trim() || !preview.complete
   view.stop.hidden = !pending
 }
 
 function closeRevisionProposal() {
-  if (activeRequest?.view === revisionProposal) activeRequest.controller.abort()
-  revisionPreview = undefined
+  if (activeRequest?.revision) activeRequest.controller.abort()
+  revisionDraft = undefined
   revisionProposal.section.close()
   manuscript.focus()
 }
@@ -503,7 +482,7 @@ async function showRequestPreview({ refreshSemantic = false, origin } = {}) {
     const blocks = [
       ['시스템 프롬프트', payload.messages[0].content],
       ...Object.entries(JSON.parse(payload.messages[1].content)).map(([key, value]) => {
-        const label = ({ projectTitle: '작품 제목', direction: '작가의 노트', ...referenceLabels })[key]
+        const label = ({ projectTitle: '작품 제목', direction: '작가의 노트', sceneLength: '장면 분량', ...referenceLabels })[key]
         const position = key === 'manuscript' && value
           ? manuscriptLineRange({ start: prepared.cutoff, end: prepared.cutoff + value.length }) : ''
         return [position ? `${label} · ${position}` : label, value]
@@ -534,82 +513,105 @@ async function showRequestPreview({ refreshSemantic = false, origin } = {}) {
   }
 }
 
-async function generateDraft(revision) {
+async function continueManuscript() {
+  if (activeRequest || planAssistant.busy) return
+  const project = currentProject()
+  const original = project.manuscript
+  const oneTimeNote = project.authorMode === 'once' ? project.direction : undefined
+  const controller = new AbortController()
+  const { signal } = controller
+  const focusedGenerate = document.activeElement === generate
+  activeRequest = { controller, revision: false }
+  syncControls()
+  if (focusedGenerate) stopWriting.focus({ preventScroll: true })
+  writingStatus.textContent = '전송할 원고와 자료를 준비하는 중이에요.'
+
+  try {
+    const { body, remaining } = await research.prepare(project, catalogModel(project.model), signal)
+    if (remaining < 0) throw new Error('모델 컨텍스트가 부족해요. 프롬프트, 참고 자료나 출력 한도를 줄여 주세요.')
+
+    let output = ''
+    const result = await requestCompletion('/api/write', withModelOptions(project, body), {
+      signal,
+      onText(content) {
+        if (!output) writingStatus.textContent = '이어서 쓰는 중이에요.'
+        output += content
+      },
+    })
+    signal.throwIfAborted()
+    const text = normalizeLineEndings(output.trim())
+    if (!text) throw new Error('추가할 원고를 받지 못했어요. 다시 요청해 주세요.')
+    if (currentProject() !== project || project.manuscript !== original) {
+      throw new Error('생성 중 원고가 바뀌었어요. 현재 원고에서 다시 요청해 주세요.')
+    }
+    if (project.authorMode === 'once' && project.direction === oneTimeNote && body.draft.direction === oneTimeNote) {
+      project.direction = ''
+      get('direction').value = ''
+    }
+    const updated = appendParagraphs(original, text)
+    saveManuscript(project, updated)
+    manuscript.setSelectionRange(updated.length, updated.length)
+    manuscript.scrollTop = manuscript.scrollHeight
+    if (project.autoMemory) refreshProjectMemory(project)
+    const status = result.truncated ? '토큰 한도까지 생성된 내용을 추가했어요. 끝 문장을 확인해 주세요.' : '원고에 추가했어요.'
+    writingStatus.textContent = result.usage ? `${status} ${usageLabel(result.usage)}` : status
+  } catch (error) {
+    writingStatus.textContent = completionFailure(error, signal)
+  } finally {
+    const focusedStop = document.activeElement === stopWriting
+    activeRequest = undefined
+    syncControls()
+    if (focusedStop) generate.focus({ preventScroll: true })
+  }
+}
+
+async function generateRevision(revision) {
   if (activeRequest || planAssistant.busy) return
   setNoteWorkspace(false)
   const project = currentProject()
-  const view = revision ? revisionProposal : continuationProposal
-  const previous = revision ? undefined : continuationPreviews.get(project.id)
-  const retained = previous?.complete ? previous : undefined
-  const oneTimeNote = !revision && project.authorMode === 'once' ? project.direction : undefined
-  const preview = {
-    original: project.manuscript, revision, text: '', model: '',
-    status: revision ? '수정안을 준비하는 중이에요.' : '전송할 원고와 자료를 준비하는 중이에요.',
-  }
+  const view = revisionProposal
+  const preview = { original: project.manuscript, revision, text: '', model: '', status: '수정안을 준비하는 중이에요.' }
   const controller = new AbortController()
-  activeRequest = { controller, preview, view }
+  activeRequest = { controller, revision: true }
+  revisionDraft = preview
   syncControls()
-  if (revision) {
-    revisionPreview = preview
-    get('revision-proposal-position').textContent = passagePosition(revision)
-    get('revision-original-text').textContent = revision.text
-    renderProposal(view, preview)
-    view.section.showModal()
-    get('revision-original-text').scrollTop = 0
-    view.body.scrollTop = 0
-  } else {
-    if (!retained) continuationPreviews.set(project.id, preview)
-    renderContinuationProposal()
-    view.title.focus()
-  }
-  const output = retained ? null : document.createTextNode('')
-  if (output) view.body.replaceChildren(output)
+  get('revision-proposal-position').textContent = passagePosition(revision)
+  get('revision-original-text').textContent = revision.text
+  renderRevisionProposal(preview)
+  view.section.showModal()
+  get('revision-original-text').scrollTop = 0
+  view.body.scrollTop = 0
+  const output = document.createTextNode('')
+  view.body.replaceChildren(output)
 
   try {
-    let body
-    if (revision) {
-      body = revisionBody(project, revision)
-    } else {
-      const prepared = await research.prepare(project, catalogModel(project.model), controller.signal)
-      if (prepared.remaining < 0) throw new Error('모델 컨텍스트가 부족해요. 프롬프트, 참고 자료나 출력 한도를 줄여 주세요.')
-      body = prepared.body
-    }
-    if (oneTimeNote !== undefined && body.draft.direction === oneTimeNote) preview.oneTimeNote = oneTimeNote
-    const result = await requestCompletion(revision ? '/api/revise' : '/api/write', withModelOptions(project, body), {
+    const body = revisionBody(project, revision)
+    const result = await requestCompletion('/api/revise', withModelOptions(project, body), {
       signal: controller.signal,
       onText(content) {
         if (controller.signal.aborted) return
         if (!preview.text.trim()) {
-          if (output) view.body.hidden = false
           preview.status = '초안을 작성하고 있어요.'
-          updateProposalActions(view, retained ?? preview)
+          renderRevisionProposal(preview)
         }
         preview.text += content
-        output?.appendData(content)
+        output.appendData(content)
       },
     })
     controller.signal.throwIfAborted()
     preview.model = result.model ?? body.model
     preview.usage = result.usage
     preview.complete = !result.truncated
-    if (result.truncated) {
-      preview.status = retained ? '새 초안이 토큰 한도에 도달했어요.' : '토큰 한도에 도달했어요. 끝 문장을 확인해 주세요.'
-    } else {
-      preview.status = revision ? '기존 문단과 비교하고 교체 여부를 선택하세요.' : '원고에 추가할 초안을 확인해 주세요.'
-    }
+    preview.status = result.truncated ? '토큰 한도에 도달했어요. 끝 문장을 확인해 주세요.'
+      : '기존 문단과 비교하고 교체 여부를 선택하세요.'
   } catch (error) {
     preview.status = completionFailure(error, controller.signal)
   } finally {
-    if (retained) {
-      if (preview.complete) continuationPreviews.set(project.id, preview)
-      else retained.retryStatus = `${preview.status} 이전 초안을 유지했어요.`
-    }
     activeRequest = undefined
     syncControls()
-    if (!revision || view.section.open) {
-      renderProposal(view, retained && !preview.complete ? retained : preview)
+    if (view.section.open) {
+      renderRevisionProposal(preview)
       if (document.activeElement === document.body) view.title.focus({ preventScroll: true })
-      if (!revision && document.activeElement === view.title) view.actions.scrollIntoView({ block: 'nearest' })
     }
   }
 }
@@ -986,13 +988,17 @@ function bindNoteImport(id, key) {
 bindField('manuscript', value => {
   setManuscriptText(currentProject(), value)
   updateCharacterCount()
-  const preview = continuationPreviews.get(currentProject().id)
-  if (preview) updateProposalActions(continuationProposal, preview)
   renderMemory()
 })
 manuscript.addEventListener('scroll', syncManuscriptGutter)
 new ResizeObserver(syncManuscriptGutter).observe(manuscript)
 bindField('direction', value => { currentProject().direction = value })
+get('scene-length').maxLength = writingFields.sceneLength
+bindField('scene-length', value => {
+  const length = value.trim()
+  if (length) currentProject().sceneLength = length
+  else delete currentProject().sceneLength
+})
 get('author-mode').addEventListener('change', event => {
   currentProject().authorMode = event.target.value
   saveWorkspace()
@@ -1023,7 +1029,7 @@ get('open-revision').addEventListener('click', () => {
 get('revision-direction').addEventListener('input', renderEstimates)
 get('generate-revision').addEventListener('click', () => {
   const paragraph = selectedRevision()
-  if (paragraph) generateDraft(paragraph)
+  if (paragraph) generateRevision(paragraph)
 })
 get('preview-request').addEventListener('click', event => showRequestPreview({ origin: event.currentTarget }))
 get('preview-semantic-search').addEventListener('click', () => showRequestPreview({ refreshSemantic: true }))
@@ -1216,56 +1222,34 @@ for (const button of toolButtons) {
 }
 get('manuscript-composer').addEventListener('submit', event => {
   event.preventDefault()
-  generateDraft()
+  continueManuscript()
 })
-for (const view of [continuationProposal, revisionProposal]) {
-  view.stop.addEventListener('click', () => activeRequest?.controller.abort())
-}
-continuationProposal.discard.addEventListener('click', () => {
-  continuationPreviews.delete(currentProject().id)
-  renderContinuationProposal()
-  manuscript.focus()
-})
+stopWriting.addEventListener('click', () => activeRequest?.controller.abort())
+revisionProposal.stop.addEventListener('click', () => activeRequest?.controller.abort())
 revisionProposal.discard.addEventListener('click', closeRevisionProposal)
 revisionProposal.section.addEventListener('cancel', event => {
   event.preventDefault()
   closeRevisionProposal()
 })
-continuationProposal.accept.addEventListener('click', () => {
-  acceptProposal(continuationProposal, continuationPreviews.get(currentProject().id))
-})
-revisionProposal.accept.addEventListener('click', () => acceptProposal(revisionProposal, revisionPreview))
-
-function acceptProposal(view, preview) {
+revisionProposal.accept.addEventListener('click', () => {
   const project = currentProject()
-  if (!preview || activeRequest || view.accept.disabled) return
-  const text = normalizeLineEndings(preview.text.trim())
-  const revision = preview.revision
-  if (revision && project.manuscript.slice(revision.start, revision.end) !== revision.text) return
-  const updated = revision
-    ? project.manuscript.slice(0, revision.start) + text + project.manuscript.slice(revision.end)
-    : appendParagraphs(project.manuscript, text)
-  setManuscriptText(project, updated)
-  if (project.authorMode === 'once' && project.direction === preview.oneTimeNote) {
-    project.direction = ''
-    get('direction').value = ''
-  }
+  if (!revisionDraft || activeRequest || revisionProposal.accept.disabled) return
+  const { start, end, text: original } = revisionDraft.revision
+  if (project.manuscript.slice(start, end) !== original) return
+  const text = normalizeLineEndings(revisionDraft.text.trim())
+  closeRevisionProposal()
+  saveManuscript(project, project.manuscript.slice(0, start) + text + project.manuscript.slice(end))
+  goToPassage({ start, end: start + text.length, text })
+})
+
+function saveManuscript(project, text) {
+  setManuscriptText(project, text)
   revisionSelection = undefined
-  manuscript.value = project.manuscript
-  if (revision) closeRevisionProposal()
-  else continuationPreviews.delete(project.id)
-  renderContinuationProposal()
+  manuscript.value = text
   updateCharacterCount()
   saveWorkspace()
   renderMemory()
   writingInputsChanged()
-  if (revision) goToPassage({ start: revision.start, end: revision.start + text.length, text })
-  else {
-    manuscript.focus()
-    manuscript.setSelectionRange(updated.length, updated.length)
-    manuscript.scrollTop = manuscript.scrollHeight
-    if (project.autoMemory) refreshProjectMemory(project)
-  }
 }
 function download(content, extension, type) {
   const title = projectName(currentProject()).replace(/[<>:"/\\|?*]/g, '_')
@@ -1350,7 +1334,6 @@ get('delete-project-form').addEventListener('submit', event => {
   }
 
   memoryJobs.get(project)?.controller?.abort()
-  continuationPreviews.delete(project.id)
   deleteProjectDialog.close()
   renderWorkspace()
   fileStatus(`‘${projectName(project)}’을 삭제했어요.`)

@@ -11,7 +11,7 @@ const validBoolean = value => typeof value === 'boolean'
 const pick = (value, keys) => Object.fromEntries(keys.filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]]))
 const promptKeys = ['systemPrompt', 'notePrompts', 'references', 'authorMode']
 const projectKeys = [
-  'title', 'synopsis', 'characterNotes', 'worldNotes', 'model', 'maxTokens', 'manuscript', 'direction', 'legacySceneNotes',
+  'title', 'synopsis', 'characterNotes', 'worldNotes', 'model', 'maxTokens', 'manuscript', 'direction', 'sceneLength', 'legacySceneNotes',
   'manuscriptMemory', 'autoMemory', 'lorebook', 'search', 'sourceLimits', 'modelOptions', ...optionalProjectModels, ...promptKeys,
 ]
 const loreCardFieldKeys = ['name', 'aliases', 'kind', 'description', 'priority', 'always']
@@ -66,7 +66,8 @@ export function validProjectBase(project) {
 
 export function validProject(project) {
   if (!validProjectBase(project) || typeof project.manuscript !== 'string' || typeof project.direction !== 'string') return false
-  return optional(project.autoMemory, validBoolean) && optional(project.lorebook, validLore) &&
+  return optional(project.sceneLength, value => limited(value, writingFields.sceneLength)) &&
+    optional(project.autoMemory, validBoolean) && optional(project.lorebook, validLore) &&
     optional(project.modelOptions, validModelOptionProfiles) &&
     optional(project.sourceLimits, limits => record(limits) &&
       Object.keys(maxSourceLimits).every(field => validSourceLimit(field, limits[field]))) &&

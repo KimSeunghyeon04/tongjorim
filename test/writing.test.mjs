@@ -45,6 +45,18 @@ test('원문 한도와 검색 범위, 출력 예약을 뺀 컨텍스트와 비�
   assert.equal(Number((after.usage.cost - before.usage.cost).toFixed(6)), 0.006)
 })
 
+test('장면 분량은 참고 자료 없이도 요청에 포함되고 비어 있으면 생략된다', () => {
+  const project = { title: '저편', direction: '문을 열어', manuscript: '', model: 'qa/write', maxTokens: 1024 }
+  const request = sceneLength => planWritingContext({ ...project, sceneLength }, [], null,
+    { manuscript: 0, pastPassages: 0 }).finish().body
+
+  const body = request('  1,500~2,000자  ')
+  assert.deepEqual(body.draft, { projectTitle: '저편', direction: '문을 열어', sceneLength: '1,500~2,000자' })
+  assert.equal(body.maxTokens, 1024)
+  assert.deepEqual(request('  ').draft, { projectTitle: '저편', direction: '문을 열어' })
+  assert.deepEqual(request(undefined).draft, { projectTitle: '저편', direction: '문을 열어' })
+})
+
 test('원문 설정은 작품 백업에서 복원되고 기존 프로젝트에는 기본값을 쓴다', () => {
   const project = { id: 'original', title: '저편', synopsis: '', worldNotes: '', model: 'qa/write', maxTokens: 1024,
     direction: '', manuscript: '' }
@@ -150,6 +162,7 @@ test('정확히 일치하는 이름은 키워드와 의미 점수가 높은 유�
 test('백업 형식, 복원 ID, AI 메모 위치와 선택 설정', () => {
   const project = {
     id: 'original', title: '저편', manuscript: '나래가 도착했다.', direction: '문을 열어', authorMode: 'once',
+    sceneLength: '1,500자 안팎',
     synopsis: '줄거리', worldNotes: '세계관', characterNotes: '인물', model: 'qa/write', maxTokens: 1024,
     memoryModel: 'qa/memory', revisionModel: 'qa/revision', planModel: 'qa/plan', search: { enabled: false, model: 'qa/embedding' },
     systemPrompt: '이어쓰기 지시', notePrompts: { revision: '퇴고 지시', memory: '메모 지시', lore: '카드 지시' },
@@ -161,10 +174,12 @@ test('백업 형식, 복원 ID, AI 메모 위치와 선택 설정', () => {
   assert.deepEqual({ ...restored, id: project.id }, project)
   assert.equal(Object.hasOwn(backup.project, 'apiKey'), false)
   assert.throws(() => readProject(JSON.stringify({ ...backup, version: 999 })), /버전/)
+  assert.throws(() => readProject(JSON.stringify({ ...backup, project: { ...backup.project, sceneLength: 1500 } })), /형식/)
   assert.throws(() => readProject(JSON.stringify({ ...backup, project: { ...backup.project,
     manuscriptMemory: { text: '도착', through: 100, stale: false },
   } })), /형식/)
   const pack = exportPack(project, { lorebook: true, prompts: true })
+  assert.equal(Object.hasOwn(pack.settings.prompts, 'sceneLength'), false)
   assert.deepEqual(readPack(JSON.stringify(pack), { lorebook: true, prompts: false }), { lorebook: [] })
   assert.deepEqual(readPack(JSON.stringify(pack), { lorebook: false, prompts: true }).notePrompts, {
     revision: '퇴고 지시', memory: '메모 지시', lore: '카드 지시',
@@ -192,6 +207,7 @@ test('다른 탭의 모델 설정을 적용할 때 원고와 프롬프트, 검�
   const live = structuredClone(saved)
   const editing = live.projects[0]
   editing.manuscript = '편집 중인 원고'
+  editing.sceneLength = '두세 문단'
   editing.notePrompts.lore = '편집 중인 카드 지시'
   editing.search = { enabled: true, model: 'qwen/qwen3-embedding-4b' }
 
@@ -202,7 +218,7 @@ test('다른 탭의 모델 설정을 적용할 때 원고와 프롬프트, 검�
   assert.deepEqual(mergeModelSettings(live, JSON.stringify(saved), JSON.stringify(next)), new Set(['original']))
   assert.equal(live.projects[0], editing)
   assert.deepEqual(editing, { ...changed, manuscript: '편집 중인 원고', notePrompts: { lore: '편집 중인 카드 지시' },
-    search: { enabled: true, model: 'qa/embedding' } })
+    sceneLength: '두세 문단', search: { enabled: true, model: 'qa/embedding' } })
   assert.deepEqual(live.projects[1], other)
 
   const conflict = { ...next, projects: [{ ...changed, manuscript: '다른 탭에서 편집한 원고', maxTokens: 4096 }, other] }

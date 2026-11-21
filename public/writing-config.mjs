@@ -15,6 +15,7 @@ export const writingFields = {
   lorebook: 5000,
   pastPassages: maxSourceLimits.pastPassages,
   direction: 1200,
+  sceneLength: 120,
 }
 
 export const systemPromptLimit = 8000
@@ -47,8 +48,10 @@ export const referenceLabels = {
 export const defaultReferences = Object.keys(referenceLabels)
 
 export function orderedWritingContext(context, references) {
-  if (references === undefined) return context
-  return Object.fromEntries(['projectTitle', 'direction', ...references].map(field => [field, context[field]]))
+  const included = references === undefined ? { ...context }
+    : Object.fromEntries(['projectTitle', 'direction', 'sceneLength', ...references].map(field => [field, context[field]]))
+  if (included.sceneLength === undefined || included.sceneLength === '') delete included.sceneLength
+  return included
 }
 
 export function writingFieldPrefix(field, text) {
@@ -121,7 +124,7 @@ export const defaultSystemPrompt = [
   '원고가 있으면 마지막 문장 바로 뒤에 붙일 새 문장부터 쓰세요. 원고가 비어 있으면 소설의 첫 문단부터 쓰세요.',
   '원고 언어와 요청을 따르되, 따로 정해진 언어가 없으면 한국어로 쓰세요.',
   '본문만 출력하세요. 기존 문장을 되풀이하거나 장면 제목, 번호, 구분선이나 해설을 덧붙이지 마세요.',
-  '한 장면 정도의 분량을 자연스럽게 이어 쓰세요. 전환이 필요하면 본문 속 문장과 문단으로 이어가세요.',
+  'sceneLength가 있으면 지정된 장면 분량에 맞춰 쓰세요. 분량 지시가 없으면 한 장면 정도를 자연스럽게 이어 쓰세요. 전환이 필요하면 본문 속 문장과 문단으로 이어가세요.',
 ].join('\n')
 
 export const defaultMemoryPrompt = [
