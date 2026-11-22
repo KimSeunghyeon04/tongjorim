@@ -1,10 +1,10 @@
 import { requestCompletion } from './completion.js'
-import { withModelOptions } from './model-options.mjs'
+import { generationOptionLabels, withModelOptions, withoutGenerationOptions } from './model-options.mjs'
 import { loreCardFields, validLoreCardFields } from './project-files.mjs'
 import { memoryForPrompt } from './manuscript-memory.mjs'
 import { activeLore } from './retrieval.mjs'
 import {
-  assistantHistoryTurns, assistantMessageLimit, assistantNoteDraftLimit, assistantReplyLimit,
+  assistantHistoryTurns, assistantMessageLimit, assistantNoteDraftLimit, assistantRepairTextLimit, assistantReplyLimit,
   projectNotesForRequest, writingFieldPrefix, writingFields,
 } from './writing-config.mjs'
 
@@ -27,25 +27,56 @@ export function assistantProjectContext(project, message) {
   }
 }
 
-function parseReply(text, kind, truncated) {
-  const invalid = truncated ? '출력 한도에 도달했어요. 더 짧게 요청하거나 설정에서 생성 한도를 올려 주세요.'
-    : '답변 형식이 맞지 않아요. 다시 보내거나 설정에서 다른 모델을 선택해 주세요.'
-  const source = text.trim().replace(/^```(?:json)?\s*\n([\s\S]*?)\n```$/i, '$1')
+function parseReply(text, kind) {
   let response
   try {
-    response = JSON.parse(source)
+    response = JSON.parse(text.trim())
   } catch {
-    throw new Error(invalid)
+    return null
   }
 
   const { reply, draft } = response ?? {}
-  const validDraft = draft === null || (kind === 'note'
-    ? typeof draft === 'string' && draft.length <= assistantNoteDraftLimit && Boolean(draft.trim())
-    : validLoreCardFields(draft) && draft.aliases.every(alias => !/[,\r\n]/.test(alias)))
-  if (typeof reply !== 'string' || !reply.trim() || reply.length > assistantReplyLimit || !validDraft) {
-    throw new Error(invalid)
+  if (typeof reply !== 'string' || !reply.trim() || reply.length > assistantReplyLimit || Object.keys(response).length !== 2) {
+    return null
   }
-  return { reply: reply.trim(), draft: kind === 'lore' && draft ? loreCardFields(draft) : draft }
+  if (draft === null) return { reply: reply.trim(), draft }
+  if (kind === 'note') {
+    return typeof draft === 'string' && draft.length <= assistantNoteDraftLimit && draft.trim()
+      ? { reply: reply.trim(), draft } : null
+  }
+  if (!validLoreCardFields(draft) || draft.aliases.some(alias => /[,\r\n]/.test(alias))) return null
+  const card = loreCardFields(draft)
+  return Object.keys(card).length === Object.keys(draft).length ? { reply: reply.trim(), draft: card } : null
+}
+
+export async function requestAssistantReply(body, { signal, projectId, onRetry }) {
+  async function complete(payload) {
+    let text = ''
+    const { truncated, omittedGenerationOptions } = await requestCompletion('/api/assistant', payload, {
+      signal, projectId,
+      onText(content) { text += content },
+    })
+    signal.throwIfAborted()
+    const omitted = Array.isArray(omittedGenerationOptions)
+      ? omittedGenerationOptions.filter(name => typeof name === 'string' && Object.hasOwn(generationOptionLabels, name)) : []
+    return { text, truncated, omitted, response: parseReply(text, body.kind) }
+  }
+
+  let result = await complete(body)
+  let omitted = result.omitted
+  if (!result.response) {
+    onRetry()
+    const previousReply = result.text.trim().slice(0, assistantRepairTextLimit).toWellFormed()
+    const retry = { ...body, previousReply }
+    if (omitted.length) retry.modelOptions = withoutGenerationOptions(body.modelOptions ?? {}, omitted)
+    result = await complete(retry)
+    omitted = [...new Set([...omitted, ...result.omitted])]
+  }
+  if (!result.response) {
+    throw new Error(result.truncated ? '출력 한도에 도달했어요. 더 짧게 요청하거나 설정에서 생성 한도를 올려 주세요.'
+      : '답변 형식을 고치지 못했어요. 다시 보내거나 설정에서 다른 모델을 선택해 주세요.')
+  }
+  return { ...result.response, truncated: result.truncated, ...(omitted.length ? { omittedGenerationOptions: omitted } : {}) }
 }
 
 function appendEmphasis(parent, text) {
@@ -155,20 +186,20 @@ export function createWritingAssistant({ transcript, scrollport = transcript, st
     onChange()
 
     try {
-      let text = ''
       const body = withModelOptions(project, { ...request, messages: [...history, user] })
-      const result = await requestCompletion('/api/assistant', body, {
+      const response = await requestAssistantReply(body, {
         signal: controller.signal, projectId: project.id,
-        onText(content) { text += content },
+        onRetry() { status.textContent = '답변 형식을 고치는 중이에요.' },
       })
       if (active !== turn) return false
 
-      const response = parseReply(text, request.kind, result.truncated)
       history.push(user, { role: 'assistant', content: response.reply })
       if (history.length > assistantHistoryTurns * 2) history.splice(0, 2)
       const answer = addMessage('assistant', response.reply)
-      status.textContent = result.truncated ? '출력 한도에 도달했어요. 답변을 확인해 주세요.' : ''
-      onReply({ ...response, truncated: result.truncated }, request)
+      status.textContent = response.truncated ? '출력 한도에 도달했어요. 답변을 확인해 주세요.' : ''
+      onReply(response, request)
+      const omitted = response.omittedGenerationOptions?.map(name => generationOptionLabels[name]).join(', ')
+      if (omitted) status.textContent = [status.textContent, `이번 답변에는 ${omitted} 옵션을 적용하지 않았어요.`].filter(Boolean).join(' ')
       revealMessage(answer)
       return true
     } catch (error) {

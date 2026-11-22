@@ -12,7 +12,7 @@ const qaApiKey = 'relay-qa-key'
 const qaManagementKey = 'relay-qa-management-key'
 const otherEmbeddingModel = 'qa/another-embedding'
 const answerKeys = ['fox', 'elevator', 'sailor']
-const models = ['write', 'memory', 'revise', 'plan'].map(name => ({
+const models = ['write', 'memory', 'revise', 'plan', 'plan-repair'].map(name => ({
   id: `qa/${name}`, name: `QA ${name}`, architecture: { input_modalities: ['text'], output_modalities: ['text'] },
   context_length: 8192, top_provider: { context_length: 6144, max_completion_tokens: 4096 },
   reasoning: { supported_efforts: ['high', 'medium', 'low'] },
@@ -58,15 +58,23 @@ globalThis.fetch = async (url, options) => {
     }).reverse()
     return Response.json({ data, usage: { prompt_tokens: 31, total_tokens: 31, cost: 0.000031 } })
   }
+  if (body.model === 'qa/plan-repair' && body.stop) {
+    return Response.json({ error: { code: 404, message: 'Mock router does not support stop' },
+      openrouter_metadata: { attempt: 0 } }, { status: 404 })
+  }
   let text = { 'qa/write': '나래는 마지막 표를 접어 두었다.', 'qa/memory': '나래가 마지막 표를 접어 두었다.', 'qa/revise': '나래는 수정된 표를 손에 쥐었다.' }[body.model]
-  const ending = Object.hasOwn(streamEndings, body.model) ? streamEndings[body.model] : undefined
+  let ending = Object.hasOwn(streamEndings, body.model) ? streamEndings[body.model] : undefined
   if (ending) text = '나래는 마지막 표를...'
-  if (body.model === 'qa/plan') {
-    const { card, mode, noteAction, request } = JSON.parse(body.messages.at(-1).content)
+  if (body.model === 'qa/plan' || body.model === 'qa/plan-repair') {
+    const { card, mode, noteAction, request, previousReply } = JSON.parse(body.messages.at(-1).content)
     const reply = mode === 'draft' ? '작품 설정을 토대로 초안을 만들었어요.' : `요청을 검토했어요. ${request}`
     const draft = card ? { ...card, name: card.name || '안개역', description: '안개가 내리는 밤에만 열리는 역.' }
       : noteAction === 'replace' ? '나래는 마지막 표의 행선지를 찾아 새벽 기차에 오른다.' : '나래는 마지막 표가 어디로 이어지는지 알아낸다.'
-    text = JSON.stringify({ reply, draft: mode === 'draft' ? draft : null })
+    text = body.model === 'qa/plan-repair' && previousReply === undefined
+      ? reply : JSON.stringify({ reply, draft: mode === 'draft' ? draft : null })
+    if (body.model === 'qa/plan-repair' && previousReply !== undefined && noteAction === 'replace') {
+      ending = streamEndings['qa/truncated']
+    }
   }
   if (!text) return Response.json({ error: { message: 'Unexpected model' } }, { status: 400 })
   const events = [

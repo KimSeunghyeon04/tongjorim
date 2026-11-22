@@ -26,14 +26,26 @@ const routingRules = {
   data_collection: value => ['allow', 'deny'].includes(value),
   max_price: value => validFields(value, { prompt: positivePrice, completion: positivePrice }),
 }
+const generationOptions = {
+  reasoning: { label: '추론 강도', valid: value => validFields(value, { effort: effort => reasoningEfforts.includes(effort) }) },
+  temperature: { label: '온도', valid: value => within(value, samplingRanges.temperature) },
+  top_p: { label: 'Top P', valid: value => within(value, samplingRanges.top_p) },
+  seed: { label: '시드', valid: value => Number.isInteger(value) && within(value, samplingRanges.seed) },
+  stop: { label: '생성 중단 문자열', valid: value => Array.isArray(value) && value.length > 0 &&
+    value.every(sequence => typeof sequence === 'string' && sequence.length > 0) },
+}
 const optionRules = {
   provider: value => validFields(value, routingRules),
-  reasoning: value => validFields(value, { effort: effort => reasoningEfforts.includes(effort) }),
-  temperature: value => within(value, samplingRanges.temperature),
-  top_p: value => within(value, samplingRanges.top_p),
-  seed: value => Number.isInteger(value) && within(value, samplingRanges.seed),
-  stop: value => Array.isArray(value) && value.length > 0 &&
-    value.every(sequence => typeof sequence === 'string' && sequence.length > 0),
+  ...Object.fromEntries(Object.entries(generationOptions).map(([name, { valid }]) => [name, valid])),
+}
+
+export const generationOptionLabels = Object.freeze(Object.fromEntries(
+  Object.entries(generationOptions).map(([name, { label }]) => [name, label]),
+))
+
+export function withoutGenerationOptions(options, omitted) {
+  return Object.fromEntries(Object.entries(options).filter(([name]) =>
+    !Object.hasOwn(generationOptions, name) || !omitted.includes(name)))
 }
 
 export const validModelOptions = value => validFields(value, optionRules)

@@ -14,7 +14,7 @@ UI 설계·구현·검증은 데스크톱 브라우저만 대상으로 한다. �
 
 | 영역 | 시작할 파일 |
 | --- | --- |
-| 로컬 HTTP 서버, 정적 파일, OpenRouter 요청과 스트리밍 | `server.mjs`, `public/completion.js` |
+| 로컬 HTTP 서버 시작, 정적 파일, OpenRouter 요청과 스트리밍 | `server.mjs`, `server-app.mjs`, `public/completion.js` |
 | 집필실과 설정 화면 | `public/writer.html`, `public/writer.js`, `public/writer.css`, `public/settings.html`, `public/settings.js`, `public/settings.css` |
 | 메모·로어북 AI 도우미 | `public/writing-assistant.mjs`, `public/writer.js`, `public/research-panel.mjs` |
 | 작업공간 저장, 백업·복원, AI 메모 | `public/writing-workspace.mjs`, `public/project-files.mjs`, `public/manuscript-memory.mjs` |
@@ -25,9 +25,9 @@ UI 설계·구현·검증은 데스크톱 브라우저만 대상으로 한다. �
 
 - 원고와 작품 설정은 서버의 SQLite에 저장한다. 브라우저 `localStorage`는 기존 작품을 가져오고 서버에 아직 저장하지 못한 작업을 보존하는 데 쓰며, 임베딩 캐시는 `IndexedDB`를 사용한다. QA는 별도 포트와 샘플 작품에서 진행하되 프로덕션 DB는 쓰지 않는다.
 - 작품 필드를 추가하거나 바꿀 때는 기존 작업공간 로드, `relay-project` 백업과 `relay-settings` 가져오기·내보내기, 다른 탭의 설정 병합에 미치는 영향을 확인한다. 설정 저장이 집필실에서 편집 중인 원고를 덮어쓰지 않도록 하고, 원고 줄바꿈을 정규화할 때는 AI 메모가 읽은 위치도 함께 맞춘다.
-- 집필 요청 미리보기와 실제 생성은 `server.mjs`의 `readStreamingPayload`를 공유한다. 참조 한도나 모델 옵션을 바꿀 때는 `writing-config.mjs`, `model-options.mjs`의 공통 정의를 활용하고 화면의 예상치와 서버가 보내는 요청을 함께 확인한다.
+- 집필 요청 미리보기와 실제 생성은 `server-app.mjs`의 `readStreamingPayload`를 공유한다. 참조 한도나 모델 옵션을 바꿀 때는 `writing-config.mjs`, `model-options.mjs`의 공통 정의를 활용하고 화면의 예상치와 서버가 보내는 요청을 함께 확인한다.
 - 퇴고와 메모·로어북 도우미의 초안은 화면에서 사용자가 반영을 선택하는 흐름을 유지한다. OpenRouter 요청을 바꿀 때는 브라우저의 스트림 파서와 서버의 오류·중지 처리도 확인한다.
-- 브라우저에서 직접 불러오는 JS, CSS 등 정적 파일을 추가하거나 이름을 바꾸면 `server.mjs`의 `assets` 목록도 갱신한다. 로컬 바인딩과 요청의 Host·Origin 검사를 보존한다.
+- 브라우저에서 직접 불러오는 JS, CSS 등 정적 파일을 추가하거나 이름을 바꾸면 `server-app.mjs`의 `assets` 목록도 갱신한다. 로컬 바인딩과 요청의 Host·Origin 검사를 보존한다.
 
 ## 검증
 

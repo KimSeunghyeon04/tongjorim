@@ -27,6 +27,7 @@ export const modelFor = (project, purpose) => project[`${purpose}Model`] ?? proj
 export const assistantMessageLimit = 2400
 export const assistantReplyLimit = 4000
 export const assistantNoteDraftLimit = 12_000
+export const assistantRepairTextLimit = 32_000
 export const noteDraftActions = ['append', 'replace']
 export const assistantHistoryTurns = 6
 export const memoryExcerptLimit = 12000
