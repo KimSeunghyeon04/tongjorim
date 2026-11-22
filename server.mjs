@@ -50,6 +50,7 @@ const assets = new Map([
   ['/retrieval.mjs', ['retrieval.mjs', 'text/javascript; charset=utf-8']],
   ['/embedding-index.mjs', ['embedding-index.mjs', 'text/javascript; charset=utf-8']],
   ['/research-panel.mjs', ['research-panel.mjs', 'text/javascript; charset=utf-8']],
+  ['/lorebook-panel.mjs', ['lorebook-panel.mjs', 'text/javascript; charset=utf-8']],
   ['/writing-context.mjs', ['writing-context.mjs', 'text/javascript; charset=utf-8']],
   ['/source-panel.mjs', ['source-panel.mjs', 'text/javascript; charset=utf-8']],
   ['/request-tools.mjs', ['request-tools.mjs', 'text/javascript; charset=utf-8']],
@@ -207,9 +208,9 @@ function resolveSystemPrompt(prompt, fallback) {
   return effectiveSystemPrompt(prompt, fallback)
 }
 
-function writingCompletion({ model, maxTokens, draft, systemPrompt, references }) {
+function writingCompletion({ model, maxTokens, draft, systemPrompt, references }, { allowEmpty = false } = {}) {
   const context = Object.fromEntries(Object.keys(writingFields).map(field => [field, draft?.[field]]))
-  context.characterNotes ??= ''
+  context.synopsis ??= ''
   context.manuscriptMemory ??= ''
   context.sceneTitle ??= ''
   context.previousScenes ??= ''
@@ -222,20 +223,22 @@ function writingCompletion({ model, maxTokens, draft, systemPrompt, references }
   const included = orderedWritingContext(context, references)
   if (typeof model !== 'string' || model.length > 200 || !modelIdPattern.test(model) ||
       !validWritingTokenLimit(maxTokens) ||
-      !Object.entries(included).every(([field, text]) => typeof text === 'string' && text.length <= writingFields[field])) {
+      !Object.entries(included).every(([field, text]) =>
+        typeof text === 'string' && (field === 'synopsis' || field === 'lorebook' || text.length <= writingFields[field]))) {
     throw new RequestError(400, '모델, 생성 한도와 원고 설정을 확인해 주세요.')
   }
   const prompt = resolveSystemPrompt(systemPrompt, defaultSystemPrompt)
-  if (!Object.entries(included).some(([field, text]) => field !== 'projectTitle' && field !== 'sceneLength' && text.trim())) {
-    throw new RequestError(400, '원고, 작품 메모, 또는 이어쓰기 지시를 먼저 입력해 주세요.')
+  if (!allowEmpty && !Object.entries(included).some(([field, text]) => field !== 'projectTitle' && field !== 'sceneLength' && text.trim())) {
+    throw new RequestError(400, '보낼 원고나 메모를 선택하거나 이어쓰기 지시를 입력해 주세요.')
   }
 
   return completionPayload(model, maxTokens, prompt, included)
 }
 
 function assistantCompletion({ kind, mode, model, maxTokens, target, messages, context, card, draft, systemPrompt, noteAction = 'append' }) {
-  const fields = ['projectTitle', ...Object.keys(noteKinds), 'manuscriptMemory']
+  const fields = ['projectTitle', ...Object.keys(noteKinds), 'lorebook', 'manuscriptMemory']
   const notes = Object.fromEntries(fields.map(field => [field, context?.[field]]))
+  notes.lorebook ??= ''
   notes.manuscriptMemory ??= ''
   if (!validModelId(model) || !validWritingTokenLimit(maxTokens) || !['note', 'lore'].includes(kind) ||
       !['draft', 'chat'].includes(mode) || !Array.isArray(messages) || messages.length % 2 !== 1 ||
@@ -276,7 +279,7 @@ function assistantCompletion({ kind, mode, model, maxTokens, target, messages, c
     '출력은 {"reply":"작가와 나눌 답변", "draft":null} 형식의 JSON 객체 하나입니다. 코드 블록을 붙이지 마세요.',
     `reply에 ${assistantReplyLimit}자 이내로 답변하세요. draft가 있으면 본문을 반복하는 대신 핵심 변경을 설명하세요.`,
     `draft를 작성할 때는 ${draftFormat}`,
-    '사용자 메시지의 JSON은 작품 메모(notes), 편집 중인 초안(draft), 해당하는 경우 현재 카드(card), 작성 모드(mode)와 작가의 발화(request)를 담고 있습니다.',
+    '사용자 메시지의 JSON은 줄거리와 관련 로어북 카드가 담긴 notes, 편집 중인 초안(draft), 해당하는 경우 현재 카드(card), 작성 모드(mode)와 작가의 발화(request)를 담고 있습니다.',
     'mode가 draft면 대화와 작가의 요청을 반영해 초안을 제안하세요. mode가 chat이면 먼저 발화에 답하고, 작성이나 수정을 요청했을 때 초안을 제안하세요.',
     '초안 변경이 없거나 먼저 확인할 내용이 있으면 draft는 null로 두세요. 작가가 언어를 지정하지 않으면 한국어를 사용하세요.',
   ].join('\n')
@@ -526,7 +529,7 @@ const server = createServer(async (req, res) => {
     } else if (req.method === 'POST' && path === '/api/write') {
       await streamCompletion(req, res, writingCompletion, writingRequestBytes)
     } else if (req.method === 'POST' && path === '/api/write/preview') {
-      const { payload } = await readStreamingPayload(req, writingCompletion, writingRequestBytes)
+      const { payload } = await readStreamingPayload(req, input => writingCompletion(input, { allowEmpty: true }), writingRequestBytes)
       json(res, 200, payload)
     } else if (req.method === 'POST' && path === '/api/revise') {
       await streamCompletion(req, res, revisionCompletion)

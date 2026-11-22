@@ -3,7 +3,7 @@ import { completionEstimate } from './request-tools.mjs'
 import { activeLore, selectPast } from './retrieval.mjs'
 import {
   completionPayload, defaultSystemPrompt, effectiveSystemPrompt, orderedWritingContext,
-  projectNotesForRequest, writingFieldPrefix,
+  writingFieldPrefix,
 } from './writing-config.mjs'
 
 function suffixAt(text, length) {
@@ -14,13 +14,15 @@ function suffixAt(text, length) {
   return text.slice(start)
 }
 
-export function planWritingContext(project, references, model, limits) {
+export function planWritingContext(project, references, model, limits, addedLoreCards) {
   const { manuscript, maxTokens, systemPrompt } = project
   const direction = writingFieldPrefix('direction', project.direction)
   const sceneLength = writingFieldPrefix('sceneLength', (project.sceneLength ?? '').trim())
-  const lore = references.includes('lorebook') ? activeLore(project.lorebook ?? [], manuscript, direction) : { text: '', included: [] }
+  const lore = references.includes('lorebook') ? activeLore(project.lorebook ?? [], manuscript, direction, addedLoreCards)
+    : { text: '', candidates: [] }
   const draft = orderedWritingContext({
-    ...projectNotesForRequest(project), direction, sceneLength, manuscriptMemory: memoryForPrompt(project),
+    projectTitle: writingFieldPrefix('projectTitle', project.title), synopsis: project.synopsis ?? '',
+    direction, sceneLength, manuscriptMemory: memoryForPrompt(project),
     lorebook: lore.text, manuscript: '', pastPassages: '',
   }, references)
   const contextLength = model?.contextLength ?? null
@@ -63,7 +65,7 @@ export function planWritingContext(project, references, model, limits) {
       const context = references.includes('pastPassages') ? { ...draft, pastPassages: text } : draft
       const usage = estimate(context)
       return {
-        body: { ...body, draft: context }, lore: lore.included, hits, cutoff, usage, contextLength, reserve,
+        body: { ...body, draft: context }, lore: lore.candidates, hits, cutoff, usage, contextLength, reserve,
         originalBudget: budget === null ? null : budget - base.inputTokens,
         remaining: budget === null ? null : budget - usage.inputTokens,
         recentReduced, pastReduced,

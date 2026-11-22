@@ -62,11 +62,11 @@
 }
 .note-conversation:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
 .note-empty { margin-top: 14px; color: var(--muted); font-size: 14px; line-height: 1.6; }
-.note-workspace .assistant-transcript { max-height: none; overflow: visible; padding: 0; gap: 14px; border: 0; }
-.note-workspace .assistant-message { font-size: 15px; line-height: 1.7; padding: 11px 16px; }
-.note-workspace .assistant-message[data-role="assistant"] { width: 100%; max-width: 100%; }
-.note-workspace .assistant-message[data-role="user"] { max-width: 84%; }
-.note-workspace .note-draft { padding: 16px 0 0; margin-top: 18px; }
+:is(.note-workspace, .lore-workspace) .assistant-transcript { max-height: none; overflow: visible; padding: 0; gap: 14px; border: 0; }
+:is(.note-workspace, .lore-workspace) .assistant-message { font-size: 15px; line-height: 1.7; padding: 11px 16px; }
+:is(.note-workspace, .lore-workspace) .assistant-message[data-role="assistant"] { width: 100%; max-width: 100%; }
+:is(.note-workspace, .lore-workspace) .assistant-message[data-role="user"] { max-width: 84%; }
+:is(.note-workspace, .lore-workspace) .note-draft { padding: 16px 0 0; margin-top: 18px; }
 .note-composer { display: grid; gap: 7px; padding: 12px var(--note-gutter) 14px; border-top: 1px solid var(--line); }
 .note-composer-actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px; }
 .writer .note-composer textarea.writing-field { min-height: 62px; max-height: 140px; }

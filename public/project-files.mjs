@@ -1,4 +1,4 @@
-import { loreKinds, loreLimits } from './retrieval.mjs'
+import { chunkManuscript, loreKinds, loreLimits, paragraphRanges } from './retrieval.mjs'
 import { validModelOptionProfiles } from './model-options.mjs'
 import { defaultReferences, maxSourceLimits, normalizeLineEndings, noteKinds, optionalProjectModels, systemPromptLimit, validModelId, validSourceLimit, validWritingTokenLimit, writingFields } from './writing-config.mjs'
 
@@ -10,9 +10,13 @@ const validMode = value => ['once', 'persistent'].includes(value)
 const validBoolean = value => typeof value === 'boolean'
 const pick = (value, keys) => Object.fromEntries(keys.filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]]))
 const promptKeys = ['systemPrompt', 'notePrompts', 'references', 'authorMode']
+const legacyNoteKinds = { characterNotes: 'character', worldNotes: 'world' }
+const legacyNoteLimit = 12_000
+const legacyReferences = ['synopsis', ...Object.keys(legacyNoteKinds), ...defaultReferences]
 const projectKeys = [
-  'title', 'synopsis', 'characterNotes', 'worldNotes', 'model', 'maxTokens', 'manuscript', 'direction', 'sceneLength', 'legacySceneNotes',
-  'manuscriptMemory', 'autoMemory', 'lorebook', 'search', 'sourceLimits', 'modelOptions', ...optionalProjectModels, ...promptKeys,
+  'title', 'synopsis', 'model', 'maxTokens', 'manuscript', 'direction', 'sceneLength', 'legacySceneNotes',
+  'manuscriptMemory', 'autoMemory', 'lorebook', 'search', 'sourceLimits', 'modelOptions',
+  ...optionalProjectModels, ...promptKeys,
 ]
 const loreCardFieldKeys = ['name', 'aliases', 'kind', 'description', 'priority', 'always']
 const cardKeys = ['id', ...loreCardFieldKeys]
@@ -22,11 +26,16 @@ export function defaultReferenceSettings() {
   return defaultReferences.map(key => ({ key, enabled: true }))
 }
 
+export const referenceSettingsFor = project => project.references ?? defaultReferenceSettings()
+
 function validReferences(refs) {
-  return Array.isArray(refs) && refs.length === defaultReferences.length &&
-    new Set(refs.map(entry => entry?.key)).size === defaultReferences.length && refs.every(entry =>
-      defaultReferences.includes(entry?.key) && validBoolean(entry.enabled))
+  if (!Array.isArray(refs)) return false
+  const keys = refs.length === defaultReferences.length ? defaultReferences : legacyReferences
+  return refs.length === keys.length && new Set(refs.map(entry => entry?.key)).size === keys.length &&
+    refs.every(entry => keys.includes(entry?.key) && validBoolean(entry.enabled))
 }
+
+const currentReferences = refs => refs.filter(ref => defaultReferences.includes(ref.key)).map(ref => pick(ref, ['key', 'enabled']))
 
 export function validLoreCard(card) {
   return record(card) && limited(card.id, 100) && Boolean(card.id) && validLoreCardFields(card)
@@ -42,7 +51,7 @@ export function validLoreCardFields(card, { allowIncomplete = false } = {}) {
 }
 
 function validLore(cards) {
-  return Array.isArray(cards) && cards.length <= loreLimits.cards && cards.every(validLoreCard) &&
+  return Array.isArray(cards) && cards.every(validLoreCard) &&
     new Set(cards.map(card => card.id)).size === cards.length
 }
 
@@ -50,7 +59,16 @@ function validPrompts(source) {
   const { systemPrompt, notePrompts, references, authorMode } = source
   return optional(systemPrompt, validPrompt) && optional(references, validReferences) && optional(authorMode, validMode) &&
     optional(notePrompts, prompts => record(prompts) && Object.entries(prompts).every(([key, text]) =>
-      (['memory', 'revision', 'lore'].includes(key) || Object.hasOwn(noteKinds, key)) && validPrompt(text)))
+      (['memory', 'revision', 'lore'].includes(key) || Object.hasOwn(noteKinds, key) || Object.hasOwn(legacyNoteKinds, key)) &&
+        validPrompt(text)))
+}
+
+function validNotePins(pins) {
+  return record(pins) && Object.entries(pins).every(([key, paragraphs]) =>
+    (Object.hasOwn(noteKinds, key) || Object.hasOwn(legacyNoteKinds, key)) && Array.isArray(paragraphs) &&
+    paragraphs.every(text => typeof text === 'string' && Boolean(text.trim())) &&
+    new Set(paragraphs).size === paragraphs.length &&
+    paragraphs.join('\n\n').length <= (key === 'synopsis' ? writingFields.synopsis : legacyNoteLimit))
 }
 
 export function hasSceneNote(note) {
@@ -59,9 +77,9 @@ export function hasSceneNote(note) {
 
 export function validProjectBase(project) {
   return record(project) && limited(project.id, 100) && Boolean(project.id) && validModelId(project.model) &&
-    validWritingTokenLimit(project.maxTokens) && ['title', 'synopsis', 'worldNotes'].every(key =>
-      typeof project[key] === 'string') && optional(project.characterNotes, value => typeof value === 'string') &&
-    validPrompts(project)
+    validWritingTokenLimit(project.maxTokens) && typeof project.title === 'string' && typeof project.synopsis === 'string' &&
+    Object.keys(legacyNoteKinds).every(key => optional(project[key], value => typeof value === 'string')) &&
+    validPrompts(project) && optional(project.pinnedNoteParagraphs, validNotePins)
 }
 
 export function validProject(project) {
@@ -79,7 +97,50 @@ export function validProject(project) {
       (memo.stale || memo.through <= project.manuscript.length))
 }
 
-export function normalizeProjectManuscript(project) {
+function noteSections(text) {
+  const headings = [...text.matchAll(/^(?:#{1,6}[ \t]+([^\n]+)|([^\n:：]{1,100})[:：])/gm)]
+  if (headings[0]?.index !== 0) headings.unshift({ index: 0 })
+  return headings.map((heading, index) => ({
+    title: (heading[1] ?? heading[2] ?? '').trim(),
+    text: text.slice(heading.index, headings[index + 1]?.index).trim(),
+  }))
+}
+
+function migrateProjectNotes(project) {
+  if (project.references) project.references = currentReferences(project.references)
+  if (!Object.keys(legacyNoteKinds).some(key => Object.hasOwn(project, key))) {
+    delete project.pinnedNoteParagraphs
+    return
+  }
+  const cards = project.lorebook ?? []
+  const ids = new Set(cards.map(card => card.id))
+  for (const [key, kind] of Object.entries(legacyNoteKinds)) {
+    let index = 0
+    let sequence = 0
+    const pins = new Set(project.pinnedNoteParagraphs?.[key]?.map(normalizeLineEndings))
+    for (const paragraph of paragraphRanges(normalizeLineEndings(project[key] ?? ''))) {
+      const always = pins.has(paragraph.text)
+      for (const section of noteSections(paragraph.text)) {
+        const title = (section.title || `${loreKinds[kind]} 메모 ${++sequence}`).slice(0, loreLimits.names).toWellFormed()
+        const pieces = section.text.length <= loreLimits.description ? [section.text]
+          : chunkManuscript(section.text).map(piece => piece.text).filter(text => text.trim())
+        for (const [part, description] of pieces.entries()) {
+          let id
+          do { id = `legacy-${kind}-${++index}` } while (ids.has(id))
+          ids.add(id)
+          const suffix = part ? ` (${part + 1})` : ''
+          const name = title.slice(0, loreLimits.names - suffix.length).toWellFormed() + suffix
+          cards.push({ id, kind, name, aliases: part ? [title] : [], description, priority: 0, always })
+        }
+      }
+    }
+    delete project[key]
+  }
+  if (cards.length) project.lorebook = cards
+  delete project.pinnedNoteParagraphs
+}
+
+export function normalizeProject(project) {
   const manuscript = normalizeLineEndings(project.manuscript)
   if (manuscript !== project.manuscript) {
     const memory = project.manuscriptMemory
@@ -88,13 +149,14 @@ export function normalizeProjectManuscript(project) {
     }
     project.manuscript = manuscript
   }
+  migrateProjectNotes(project)
   return project
 }
 
 function clean(source, keys) {
   const result = structuredClone(pick(source, keys))
   if (result.lorebook) result.lorebook = result.lorebook.map(card => pick(card, cardKeys))
-  if (result.references) result.references = result.references.map(ref => pick(ref, ['key', 'enabled']))
+  if (result.references) result.references = currentReferences(result.references)
   if (result.search) result.search = pick(result.search, ['enabled', 'model'])
   if (result.sourceLimits) result.sourceLimits = pick(result.sourceLimits, Object.keys(maxSourceLimits))
   if (result.manuscriptMemory) result.manuscriptMemory = pick(result.manuscriptMemory, ['text', 'through', 'stale'])
@@ -118,7 +180,7 @@ export function readProject(text) {
   const file = readVersion(text, 'relay-project')
   const data = { ...file.project, id: crypto.randomUUID() }
   if (!validProject(data)) throw new Error('원고나 작품 설정의 형식이 올바르지 않아요.')
-  return normalizeProjectManuscript({ ...clean(data, projectKeys), id: data.id })
+  return { ...clean(normalizeProject(data), projectKeys), id: data.id }
 }
 
 export function exportPack(project, { lorebook, prompts }) {

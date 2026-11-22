@@ -1,4 +1,4 @@
-import { hasSceneNote, normalizeProjectManuscript, validProject, validProjectBase } from './project-files.mjs'
+import { hasSceneNote, normalizeProject, validProject, validProjectBase } from './project-files.mjs'
 import { searchFor } from './retrieval.mjs'
 import { appendParagraphs, freeModel, normalizeLineEndings, optionalProjectModels } from './writing-config.mjs'
 
@@ -13,7 +13,7 @@ export const projectName = project => project.title.trim() || '제목 없는 소
 
 export function makeProject(title = '제목 없는 소설') {
   return {
-    id: crypto.randomUUID(), title, synopsis: '', characterNotes: '', worldNotes: '',
+    id: crypto.randomUUID(), title, synopsis: '',
     model: freeModel.id, maxTokens: 2048, manuscript: '', direction: '',
   }
 }
@@ -27,8 +27,14 @@ function sampleWorkspace() {
   ].join('\n\n')
   sample.direction = '선장은 이 문장을 이미 알고 있다. 서로 모르는 척하는 두 사람의 짧은 대화로 장면을 이어간다.'
   sample.synopsis = '항해 지도에 없는 섬에서 편지가 도착한다. 실종된 오빠가 보낸 편지라고 믿는 서윤은 새벽 여객선에 오른다.'
-  sample.characterNotes = '서윤: 지도 복원가. 낯선 표식은 쉽게 지나치지 않지만 사람의 속뜻을 바로 묻지는 않는다.\n선장: 이름을 밝히지 않는다. 행선지에 관해 짧게만 답한다.'
-  sample.worldNotes = '배경: 늦가을 항구. 서윤의 시점에서 과거형으로 서술한다.'
+  sample.lorebook = [
+    { id: 'sample-seoyun', kind: 'character', name: '서윤', aliases: [], priority: 0, always: false,
+      description: '지도 복원가. 낯선 표식은 쉽게 지나치지 않지만 사람의 속뜻을 바로 묻지는 않는다.' },
+    { id: 'sample-captain', kind: 'character', name: '선장', aliases: [], priority: 0, always: false,
+      description: '이름을 밝히지 않는다. 행선지에 관해 짧게만 답한다.' },
+    { id: 'sample-setting', kind: 'world', name: '배경과 시점', aliases: [], priority: 0, always: true,
+      description: '늦가을 항구. 서윤의 시점에서 과거형으로 서술한다.' },
+  ]
   return { version: workspaceVersion, activeProjectId: sample.id, projects: [sample] }
 }
 
@@ -55,10 +61,10 @@ export function readWorkspace(serialized) {
   if (data.version === 1 && data.projects.every(project => Array.isArray(project.scenes) &&
       project.scenes.length && project.scenes.every(scene => hasSceneNote(scene) &&
         typeof scene.id === 'string' && typeof scene.text === 'string'))) {
-    return { ...data, version: workspaceVersion, projects: data.projects.map(mergeProjectScenes) }
+    return { ...data, version: workspaceVersion, projects: data.projects.map(project => normalizeProject(mergeProjectScenes(project))) }
   }
   if (data.version === workspaceVersion && data.projects.every(validProject)) {
-    data.projects.forEach(normalizeProjectManuscript)
+    data.projects.forEach(normalizeProject)
     return data
   }
   throw new Error('Unknown workspace')

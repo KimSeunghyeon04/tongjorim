@@ -45,7 +45,8 @@
     <main class="manuscript-stage" aria-label="집필 작업 공간">
       <div class="workspace-tabs" role="tablist" aria-label="작업 화면">
         <button type="button" id="manuscript-tab" role="tab" aria-selected="true" aria-controls="manuscript-view">원고</button>
-        <button type="button" id="note-workspace-tab" role="tab" aria-selected="false" aria-controls="note-planner" tabindex="-1">메모 작성 도우미</button>
+        <button type="button" id="note-workspace-tab" role="tab" aria-selected="false" aria-controls="note-planner" tabindex="-1">줄거리 도우미</button>
+        <button type="button" id="lore-workspace-tab" role="tab" aria-selected="false" aria-controls="lore-workspace" tabindex="-1">로어북</button>
       </div>
       <div id="storage-error" class="storage-error" hidden>
         <p id="storage-error-message" role="alert"></p>
@@ -104,8 +105,6 @@
       </div>
       <section class="note-workspace" id="note-planner" role="tabpanel" aria-labelledby="note-workspace-tab" hidden>
         <div class="note-workspace-target">
-          <label for="plan-target">작성할 메모</label>
-          <select class="writing-field" id="plan-target"></select>
           <label for="plan-action">반영 방식</label>
           <select class="writing-field" id="plan-action">
             <option value="append">내용 추가</option>
@@ -114,11 +113,11 @@
           <button type="button" class="quiet-button" id="edit-plan-prompt" aria-haspopup="dialog" aria-controls="prompt-dialog">프롬프트 편집</button>
         </div>
         <div class="note-conversation" id="plan-conversation" role="region" aria-label="대화와 초안" tabindex="0">
-          <p class="note-empty" id="plan-empty">아이디어를 보내거나 작품 메모를 바탕으로 초안을 만들어 보세요.</p>
+          <p class="note-empty" id="plan-empty">아이디어를 보내거나 기존 줄거리를 바탕으로 초안을 만들어 보세요.</p>
           <ol class="assistant-transcript" id="plan-transcript" aria-label="메모 작성 대화" hidden></ol>
           <section class="note-draft" id="note-draft" aria-labelledby="note-draft-title" hidden>
             <h3 id="note-draft-title"></h3>
-            <p class="field-hint" id="note-draft-replace-hint" hidden>수정안으로 교체하면 선택한 작품 메모 전체가 바뀌어요.</p>
+            <p class="field-hint" id="note-draft-replace-hint" hidden>수정안을 적용하면 줄거리 전체가 바뀌어요.</p>
             <textarea class="writing-field" id="note-draft-text" rows="6" aria-labelledby="note-draft-title"></textarea>
             <p class="field-hint" id="note-draft-status" role="status" hidden></p>
             <div class="note-draft-actions">
@@ -147,8 +146,100 @@
               <button type="button" class="outline-button" id="plan-stop" hidden>응답 중지</button>
             </div>
           </div>
-          <p class="field-hint" id="plan-context">작품 메모와 대화, 편집 중인 초안을 OpenRouter에 보내요.</p>
+          <p class="field-hint" id="plan-context">줄거리와 관련 로어북 카드, 대화와 편집 중인 초안을 OpenRouter에 보내요.</p>
         </form>
+      </section>
+      <section class="lore-workspace" id="lore-workspace" role="tabpanel" aria-labelledby="lore-workspace-tab" hidden>
+        <div class="lore-workspace-toolbar">
+          <div class="lore-card-picker">
+            <label for="lore-card-select">카드 선택</label>
+            <select class="writing-field" id="lore-card-select"></select>
+            <button type="button" id="lore-new-card" class="outline-button">새 카드</button>
+          </div>
+          <div class="lore-list-feedback" id="lore-list-feedback" hidden>
+            <p class="field-hint" id="lore-list-status" role="status"></p>
+            <button type="button" id="lore-undo-delete" class="quiet-button" hidden>삭제 실행 취소</button>
+          </div>
+        </div>
+        <div class="lore-workspace-columns">
+          <section class="lore-card-editor" aria-labelledby="lore-editor-title">
+            <h2 id="lore-editor-title">새 카드</h2>
+            <form class="lore-card-form" id="lore-form">
+              <div class="lore-card-identity">
+                <div class="writing-input">
+                  <label for="lore-name">카드 이름</label>
+                  <input class="writing-field" id="lore-name" required maxlength="100">
+                </div>
+                <div class="writing-input">
+                  <label for="lore-kind">분류</label>
+                  <select id="lore-kind" class="writing-field"></select>
+                </div>
+              </div>
+              <div class="writing-input">
+                <label for="lore-aliases">별칭</label>
+                <input class="writing-field" id="lore-aliases" maxlength="1620" placeholder="쉼표로 구분">
+              </div>
+              <div class="writing-input">
+                <label for="lore-description">설명</label>
+                <textarea class="writing-field" id="lore-description" rows="10" required maxlength="1800"></textarea>
+              </div>
+              <div class="lore-card-options">
+                <div class="writing-input">
+                  <label for="lore-priority">우선순위</label>
+                  <input class="writing-field" id="lore-priority" type="number" min="-100" max="100" value="0" required>
+                </div>
+                <label class="memory-auto"><input id="lore-always" type="checkbox"> 항상 포함</label>
+              </div>
+              <p class="field-hint" id="lore-form-status" role="status"></p>
+              <div class="compact-actions lore-card-actions">
+                <button type="submit" id="save-lore" class="writing-primary">카드 추가</button>
+                <button type="button" id="lore-cancel" class="quiet-button" hidden>편집 취소</button>
+                <button type="button" id="lore-delete-card" class="quiet-button" hidden>카드 삭제</button>
+              </div>
+            </form>
+          </section>
+          <section class="lore-discussion" aria-labelledby="lore-assistant-title">
+            <div class="field-heading lore-discussion-header">
+              <h2 id="lore-assistant-title">AI와 대화</h2>
+              <button type="button" class="quiet-button" id="edit-lore-prompt" aria-haspopup="dialog" aria-controls="prompt-dialog">프롬프트 편집</button>
+            </div>
+            <div class="note-conversation lore-conversation" id="lore-conversation" role="region" aria-label="대화와 카드 초안">
+              <p class="note-empty" id="lore-conversation-empty">카드에 담을 설정이나 바꾸고 싶은 점을 이야기해 보세요.</p>
+              <ol class="assistant-transcript" id="lore-assistant-transcript" aria-label="카드 대화" hidden></ol>
+              <section class="note-draft" id="lore-card-draft" aria-labelledby="lore-draft-title" hidden>
+                <h3 id="lore-draft-title">카드 초안</h3>
+                <dl class="lore-draft-fields" id="lore-draft-fields"></dl>
+                <div class="compact-actions">
+                  <button type="button" id="lore-draft-apply" class="outline-button">편집란에 반영</button>
+                  <button type="button" id="lore-draft-discard" class="quiet-button">초안 버리기</button>
+                </div>
+              </section>
+            </div>
+            <form class="note-composer" id="lore-assistant-form">
+              <p class="field-hint assistant-status" id="lore-assistant-status" role="status"></p>
+              <p class="field-hint" id="lore-notes-limit" hidden></p>
+              <div class="writing-input">
+                <label for="lore-assistant-prompt">AI에게 요청</label>
+                <textarea class="writing-field" id="lore-assistant-prompt" rows="2" aria-describedby="lore-context lore-notes-limit"></textarea>
+              </div>
+              <div class="compact-actions lore-discussion-actions">
+                <button type="submit" id="lore-send" class="writing-primary" disabled>보내기</button>
+                <button type="button" id="lore-draft-start" class="outline-button">카드 초안 만들기</button>
+                <button type="button" id="lore-assistant-stop" class="quiet-button" hidden>응답 중지</button>
+                <button type="button" id="lore-assistant-reset" class="quiet-button" hidden>새 대화</button>
+              </div>
+              <p class="field-hint" id="lore-context">현재 카드와 줄거리, 관련 로어북 카드, 대화와 초안을 OpenRouter에 보내요.</p>
+            </form>
+          </section>
+        </div>
+        <dialog id="lore-delete-dialog" class="lore-delete-dialog" aria-labelledby="lore-delete-title" aria-describedby="lore-delete-message">
+          <h2 id="lore-delete-title">로어북 카드 삭제</h2>
+          <p id="lore-delete-message"></p>
+          <form method="dialog" class="compact-actions">
+            <button class="quiet-button" type="submit" value="cancel" autofocus>취소</button>
+            <button class="writing-primary" type="submit" value="delete">카드 삭제</button>
+          </form>
+        </dialog>
       </section>
     </main>
 
@@ -167,23 +258,32 @@
             <button class="quiet-button" type="button" id="close-request-preview">닫기</button>
           </div>
           <p class="proposal-status" id="request-preview-status" role="status"></p>
-          <div class="preview-semantic-action" id="preview-semantic-action" hidden>
-            <p class="field-hint" id="preview-semantic-cost">현재 키워드 검색 결과를 표시하고 있어요. 의미 검색을 반영하면 과거 문단과 검색어를 OpenRouter에 보내며 임베딩 비용이 들 수 있어요.</p>
-            <button class="outline-button" id="preview-semantic-search" type="button" aria-describedby="preview-semantic-cost">의미 검색 반영</button>
-          </div>
           <div class="request-preview-data" id="request-preview-data" hidden>
             <p class="field-hint" id="request-preview-estimate"></p>
-            <div id="request-blocks" class="request-blocks"></div>
             <section id="lore-preview-section" aria-labelledby="lore-preview-title">
-              <h3 id="lore-preview-title">로어북 카드 활성화</h3>
-              <ul id="lore-activation" class="evidence-list"></ul>
+              <h3 id="lore-preview-title">로어북 카드</h3>
+              <fieldset id="lore-preview-fields" class="lore-preview-fields" aria-labelledby="lore-preview-title">
+                <ul id="lore-activation" class="evidence-list lore-preview-list" aria-label="포함된 카드"></ul>
+                <details id="lore-preview-omitted" hidden>
+                  <summary id="lore-preview-omitted-count"></summary>
+                  <ul id="lore-omitted-list" class="evidence-list lore-preview-list"></ul>
+                </details>
+              </fieldset>
             </section>
             <section id="past-preview-section" aria-labelledby="past-preview-title">
-              <h3 id="past-preview-title">과거 원문 위치</h3>
+              <h3 id="past-preview-title">과거 원문</h3>
               <p class="field-hint" id="past-search-summary"></p>
               <ul class="evidence-list" id="past-reading-list"></ul>
+              <div class="preview-semantic-action" id="preview-semantic-action" hidden>
+                <p class="field-hint" id="preview-semantic-cost">의미 검색을 사용하면 과거 문단과 검색어를 OpenRouter에 보내며 임베딩 비용이 들 수 있어요.</p>
+                <button class="outline-button" id="preview-semantic-search" type="button" aria-describedby="preview-semantic-cost">의미 검색 반영</button>
+              </div>
             </section>
-            <details class="request-json">
+            <section id="recent-preview-section" aria-labelledby="recent-preview-title" hidden>
+              <h3 id="recent-preview-title">최근 원고 전송 범위</h3>
+              <p class="field-hint" id="recent-preview-range"></p>
+            </section>
+            <details class="request-json" id="request-json-details">
               <summary>전송 JSON</summary>
               <pre id="request-json"></pre>
             </details>
@@ -242,8 +342,6 @@
       <div id="notes-panel" class="tool-panel" hidden>
         <div class="project-note-buttons" data-manuscript-only>
           <button class="outline-button" type="button" data-open-project-note="synopsis" aria-haspopup="dialog" aria-controls="project-note-dialog">줄거리</button>
-          <button class="outline-button" type="button" data-open-project-note="characterNotes" aria-haspopup="dialog" aria-controls="project-note-dialog">인물</button>
-          <button class="outline-button" type="button" data-open-project-note="worldNotes" aria-haspopup="dialog" aria-controls="project-note-dialog">세계관</button>
           <button class="outline-button" type="button" data-open-project-note="memory" aria-haspopup="dialog" aria-controls="project-note-dialog">원고 메모</button>
           <button class="outline-button" id="open-legacy-notes" type="button" data-open-project-note="legacy" aria-haspopup="dialog" aria-controls="project-note-dialog" hidden>이전 장면의 제목과 지시</button>
         </div>
@@ -266,84 +364,10 @@
         </details>
       </div>
       <div id="lore-panel" class="tool-panel" hidden>
-        <section class="lore-section" aria-label="로어북">
-          <p class="field-hint" id="lore-empty">추가한 카드가 없어요.</p>
-          <div class="lore-list-feedback" id="lore-list-feedback" hidden>
-            <p class="field-hint" id="lore-list-status" role="status"></p>
-            <button type="button" id="lore-undo-delete" class="outline-button" hidden>삭제 실행 취소</button>
-          </div>
-          <ul class="lore-list" id="lore-list"></ul>
-          <details class="note-planner" id="lore-editor">
-            <summary>카드 작성</summary>
-            <div class="compact-actions lore-editor-actions">
-              <button type="button" id="lore-new-card" class="quiet-button" hidden>새 카드 작성</button>
-              <button type="button" id="lore-open-assistant" class="outline-button" aria-controls="lore-assistant">AI 카드 도우미로 이동</button>
-            </div>
-            <form class="note-planner-form" id="lore-form">
-              <div class="writing-input">
-                <label for="lore-kind">종류</label>
-                <select id="lore-kind" class="writing-field"></select>
-              </div>
-              <div class="writing-input">
-                <label for="lore-name">카드 이름</label>
-                <input class="writing-field" id="lore-name" required maxlength="100">
-              </div>
-              <div class="writing-input">
-                <label for="lore-aliases">별칭</label>
-                <input class="writing-field" id="lore-aliases" maxlength="1620" placeholder="쉼표로 구분">
-              </div>
-              <div class="writing-input">
-                <label for="lore-description">설명</label>
-                <textarea class="writing-field" id="lore-description" rows="4" required maxlength="1800"></textarea>
-              </div>
-              <div class="writing-input">
-                <label for="lore-priority">우선순위</label>
-                <input class="writing-field" id="lore-priority" type="number" min="-100" max="100" value="0" required>
-              </div>
-              <label class="memory-auto"><input id="lore-always" type="checkbox"> 항상 포함</label>
-              <p class="field-hint" id="lore-form-status" role="status"></p>
-              <div class="memory-buttons">
-                <button type="submit" id="save-lore" class="writing-primary">카드 추가</button>
-                <button type="button" id="lore-cancel" class="quiet-button" hidden>편집 취소</button>
-              </div>
-            </form>
-            <section id="lore-assistant" class="writing-assistant lore-assistant" aria-labelledby="lore-assistant-title">
-              <div class="field-heading">
-                <h3 id="lore-assistant-title" tabindex="-1">AI 카드 도우미</h3>
-                <button type="button" class="quiet-button" id="edit-lore-prompt" aria-haspopup="dialog" aria-controls="prompt-dialog">프롬프트 편집</button>
-              </div>
-              <p class="field-hint">현재 카드와 작품 메모를 참고해요.</p>
-              <p class="field-hint" id="lore-notes-limit" hidden></p>
-              <ol class="assistant-transcript" id="lore-assistant-transcript" aria-label="로어북 카드 작성 대화" hidden></ol>
-              <p class="field-hint assistant-status" id="lore-assistant-status" role="status"></p>
-              <section class="assistant-draft" id="lore-card-draft" aria-labelledby="lore-draft-title" hidden>
-                <h4 id="lore-draft-title">카드 초안</h4>
-                <dl class="lore-draft-fields" id="lore-draft-fields"></dl>
-                <button type="button" id="lore-draft-apply" class="outline-button">카드에 반영</button>
-              </section>
-              <form class="assistant-composer" id="lore-assistant-form">
-                <div class="writing-input">
-                  <label for="lore-assistant-prompt">AI에게 요청</label>
-                  <textarea class="writing-field" id="lore-assistant-prompt" rows="2" placeholder="이 카드의 보완할 점을 알려줘" aria-describedby="lore-notes-limit"></textarea>
-                </div>
-                <div class="compact-actions">
-                  <button type="submit" id="lore-send" class="writing-primary" disabled>보내기</button>
-                  <button type="button" id="lore-draft-start" class="outline-button">카드 초안 만들기</button>
-                  <button type="button" id="lore-assistant-stop" class="quiet-button" hidden>중지</button>
-                  <button type="button" id="lore-assistant-reset" class="quiet-button" hidden>대화 초기화</button>
-                </div>
-              </form>
-            </section>
-          </details>
-          <dialog id="lore-delete-dialog" class="lore-delete-dialog" aria-labelledby="lore-delete-title" aria-describedby="lore-delete-message">
-            <h2 id="lore-delete-title">로어북 카드 삭제</h2>
-            <p id="lore-delete-message"></p>
-            <form method="dialog" class="compact-actions">
-              <button class="quiet-button" type="submit" value="cancel" autofocus>취소</button>
-              <button class="writing-primary" type="submit" value="delete">카드 삭제</button>
-            </form>
-          </dialog>
-        </section>
+        <p class="field-hint" id="lore-quick-empty" hidden>메인 로어북 탭에서 카드를 추가하세요.</p>
+        <p class="field-hint" id="lore-quick-reference" hidden>이번 요청에 카드를 넣으려면 참고 자료에서 로어북을 켜 주세요.</p>
+        <p class="field-hint" id="lore-quick-status" role="status"></p>
+        <fieldset id="lore-quick-list" class="lore-quick-list" aria-label="로어북 포함 설정"></fieldset>
       </div>
     </aside>
   </div>
@@ -389,10 +413,6 @@
           <option value="revision">선택 문단 퇴고</option>
         </select>
       </div>
-      <div class="writing-input" id="note-prompt-target-field" hidden>
-        <label for="note-prompt-target">적용할 메모</label>
-        <select class="writing-field" id="note-prompt-target"></select>
-      </div>
       <div class="writing-input">
         <div class="field-heading">
           <label for="system-prompt" id="system-prompt-label">시스템 프롬프트</label>
@@ -419,25 +439,8 @@
           </div>
           <input type="file" id="synopsis-file" accept=".txt,.md,.markdown" multiple hidden>
           <textarea class="writing-field" id="synopsis" rows="4" placeholder="이야기의 큰 흐름과 결말 계획을 적어 두세요."></textarea>
+          <p class="field-hint">줄거리 전문은 이어쓰기마다 전송돼요.</p>
           <p class="field-hint import-status" id="synopsis-status" role="status" hidden></p>
-        </div>
-        <div class="writing-input" data-project-note="characterNotes" hidden>
-          <div class="field-heading">
-            <label for="character-notes">인물</label>
-            <button type="button" class="quiet-button" id="character-notes-import" aria-label="인물 파일 불러오기" aria-describedby="import-formats">파일 불러오기</button>
-          </div>
-          <input type="file" id="character-notes-file" accept=".txt,.md,.markdown" multiple hidden>
-          <textarea class="writing-field" id="character-notes" rows="4" placeholder="인물의 성격, 관계와 말투를 적어 두세요."></textarea>
-          <p class="field-hint import-status" id="character-notes-status" role="status" hidden></p>
-        </div>
-        <div class="writing-input" data-project-note="worldNotes" hidden>
-          <div class="field-heading">
-            <label for="world-notes">세계관</label>
-            <button type="button" class="quiet-button" id="world-notes-import" aria-label="세계관 파일 불러오기" aria-describedby="import-formats">파일 불러오기</button>
-          </div>
-          <input type="file" id="world-notes-file" accept=".txt,.md,.markdown" multiple hidden>
-          <textarea class="writing-field" id="world-notes" rows="4" placeholder="배경, 장소와 세계의 규칙을 적어 두세요."></textarea>
-          <p class="field-hint import-status" id="world-notes-status" role="status" hidden></p>
         </div>
         <section class="memory-controls" id="manuscript-memory" data-project-note="memory" hidden>
           <p class="field-hint">원고의 사건, 인물 상태와 복선을 정리해 다음 이어쓰기에 사용해요.</p>

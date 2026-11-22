@@ -7,8 +7,6 @@ export const writingFields = {
   projectTitle: 120,
   sceneTitle: 120,
   synopsis: 8000,
-  characterNotes: 12000,
-  worldNotes: 12000,
   previousScenes: 6500,
   manuscript: maxSourceLimits.manuscript,
   manuscriptMemory: 8000,
@@ -34,23 +32,22 @@ export const assistantHistoryTurns = 6
 export const memoryExcerptLimit = 12000
 export const memoryOutputLimit = 4096
 export const defaultRevisionPrompt = '선택한 문단을 다듬는 소설 편집자입니다. 서술 시점, 시제, 인물 관계와 원래 의미를 유지하고 작가의 퇴고 지시를 적용하세요. 원고에 그대로 교체할 수정된 문단만 출력하세요.'
-export const defaultLoreSystemPrompt = '소설의 로어북 카드를 작성하는 편집 도우미입니다. 작품 메모와 현재 카드의 설정을 유지하며 작가와 개선 방향을 의논하세요.'
+export const defaultLoreSystemPrompt = '소설의 로어북 카드를 작성하는 편집 도우미입니다. 줄거리와 기존 로어북 설정을 유지하며 작가와 개선 방향을 의논하세요.'
 
 export const referenceLabels = {
   synopsis: '줄거리',
-  characterNotes: '인물 메모',
-  worldNotes: '세계관 메모',
   lorebook: '로어북',
   pastPassages: '과거 원문',
   manuscriptMemory: 'AI 메모',
   manuscript: '최근 원고',
 }
-export const defaultReferences = Object.keys(referenceLabels)
+export const defaultReferences = Object.keys(referenceLabels).filter(key => key !== 'synopsis')
 
 export function orderedWritingContext(context, references) {
   const included = references === undefined ? { ...context }
-    : Object.fromEntries(['projectTitle', 'direction', 'sceneLength', ...references].map(field => [field, context[field]]))
+    : Object.fromEntries(['projectTitle', 'direction', 'sceneLength', 'synopsis', ...references].map(field => [field, context[field]]))
   if (included.sceneLength === undefined || included.sceneLength === '') delete included.sceneLength
+  if (included.synopsis === undefined || included.synopsis === '') delete included.synopsis
   return included
 }
 
@@ -89,21 +86,10 @@ export const noteKinds = {
     placeholder: '예: 지도에 없는 섬을 찾는 미스터리. 중반에 단서의 의미가 뒤집히면 좋겠어요.',
     instruction: '이야기의 전제, 주인공의 목표와 갈등, 주요 전환점을 제안하세요. 기존 줄거리가 있으면 요청에 맞는 새 사건이나 보강할 지점을 구체화하세요.',
   },
-  characterNotes: {
-    label: '인물',
-    placeholder: '예: 선장이 숨기는 비밀과, 그 비밀 때문에 서윤과 충돌하는 이유를 만들어 줘.',
-    instruction: '인물의 역할, 목표, 약점이나 모순, 관계와 행동을 구체화하세요. 새 인물을 잡을 때는 그 인물이 기존 사건에 어떻게 관여하는지 제안하세요.',
-  },
-  worldNotes: {
-    label: '세계관',
-    placeholder: '예: 안개가 끼는 날에만 열리는 항로. 이용 규칙과 어겼을 때의 대가를 정해 줘.',
-    instruction: '시대와 장소, 세계의 규칙과 제약, 그것이 인물의 생활과 이야기의 갈등에 미치는 영향을 구체화하세요. 확정된 설정이 있으면 그 안에서 새 요소를 제안하세요.',
-  },
 }
 
 export function projectNotesForRequest(project) {
-  const notes = Object.keys(noteKinds).map(field => [field, writingFieldPrefix(field, project[field] ?? '')])
-  return { projectTitle: writingFieldPrefix('projectTitle', project.title), ...Object.fromEntries(notes) }
+  return { projectTitle: writingFieldPrefix('projectTitle', project.title), synopsis: writingFieldPrefix('synopsis', project.synopsis) }
 }
 
 export function defaultNoteSystemPrompt(target) {
@@ -112,14 +98,14 @@ export function defaultNoteSystemPrompt(target) {
     `당신은 소설의 ${kind.label} 메모를 작가와 함께 만드는 기획 도우미입니다.`,
     kind.instruction,
     '기존 설정의 이름과 사실을 유지하고, 작가가 요청한 방향에 맞는 내용을 제안하세요. 주어진 정보가 적으면 바로 발전시킬 수 있는 구체적인 가안을 만들어 주세요.',
-    '대화에서는 대안을 비교하거나 필요한 질문을 하세요. 메모 초안은 선택한 반영 방식에 맞춰 작성하고, 필요하면 짧은 소제목이나 목록을 사용하세요.',
+    '대화에서는 대안을 비교하거나 필요한 질문을 하세요. 줄거리 초안은 선택한 반영 방식에 맞춰 간결한 산문으로 작성하세요.',
     '작가가 언어를 따로 지정하지 않으면 한국어로 작성하세요.',
   ].join('\n')
 }
 
 export const defaultSystemPrompt = [
   '당신은 하나의 소설 원고를 이어 쓰는 공동 집필자입니다.',
-  '사용자 메시지의 JSON에서 direction은 작가의 노트입니다. 함께 제공된 lorebook(로어북), pastPassages(과거 원문), manuscriptMemory(AI 메모), manuscript(최근 원고)와 작품 메모는 이어쓰기에 참고하세요.',
+  '사용자 메시지의 JSON에서 direction은 작가의 노트이며 synopsis는 작품 전체의 큰 흐름을 압축한 줄거리입니다. 이어쓸 때 lorebook(로어북), pastPassages(과거 원문), manuscriptMemory(AI 메모), manuscript(최근 원고)도 참고하세요.',
   '이어쓰기 지시를 반영하고 기존 사건, 인물, 시점, 시제와 문체를 이어가세요. 원고에서 정리한 메모는 앞부분의 사건과 인물 상태를 참고하는 데 쓰세요.',
   '원고가 있으면 마지막 문장 바로 뒤에 붙일 새 문장부터 쓰세요. 원고가 비어 있으면 소설의 첫 문단부터 쓰세요.',
   '원고 언어와 요청을 따르되, 따로 정해진 언어가 없으면 한국어로 쓰세요.',

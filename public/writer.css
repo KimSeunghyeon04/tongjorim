@@ -389,27 +389,61 @@
 .writing-input .field-hint { margin-top: 5px; }
 .import-status[data-error="true"] { color: #89492d; }
 .compact-actions, .file-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.preview-semantic-action { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.preview-semantic-action { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 8px; }
 .pack-review { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--tint); }
 .pack-review h4 { margin: 0; font-size: 14px; }
-.reference-list, .lore-list, .evidence-list { list-style: none; margin: 0; padding: 0; }
+.reference-list, .evidence-list { list-style: none; margin: 0; padding: 0; }
 .reference-list { padding: 0 11px 7px; }
 .reference-list li { display: flex; align-items: center; min-height: 35px; gap: 3px; border-top: 1px solid var(--line); }
 .reference-list label { display: flex; align-items: center; flex: 1; gap: 5px; font-size: 12px; }
 .reference-list button { width: 28px; min-height: 30px; padding: 0; }
-.lore-section { display: grid; gap: 8px; min-width: 0; }
-.lore-list-feedback { display: grid; justify-items: start; gap: 5px; }
-.lore-list li { padding: 5px 0 7px; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
-.lore-list strong { font-size: 13px; }
-.lore-editor-actions { margin: 0 11px; padding-bottom: 10px; }
+.lore-workspace {
+  --note-gutter: clamp(16px, 2.5vw, 34px);
+  display: grid;
+  flex: 1;
+  min-height: 0;
+  width: min(100%, 1100px);
+  margin-inline: auto;
+  grid-template-rows: auto minmax(0, 1fr);
+  background: var(--paper);
+}
+.lore-workspace-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 12px var(--note-gutter);
+  border-bottom: 1px solid var(--line);
+}
+.lore-card-picker, .lore-list-feedback { display: flex; align-items: center; gap: 8px; }
+.lore-card-picker label { font-size: 13px; font-weight: 700; }
+.lore-card-picker .writing-field { width: clamp(145px, 23vw, 275px); }
+.lore-workspace-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.12fr); min-height: 0; }
+.lore-card-editor { min-width: 0; overflow: auto; padding: 20px var(--note-gutter) 24px; }
+.lore-card-editor h2, .lore-discussion h2 { margin: 0; font-size: 17px; overflow-wrap: anywhere; }
+.lore-card-form { display: grid; gap: 15px; margin-top: 18px; }
+.lore-card-identity { display: grid; grid-template-columns: minmax(0, 1fr) minmax(77px, 30%); gap: 12px; }
+.lore-card-options { display: flex; flex-wrap: wrap; align-items: end; gap: 10px 16px; }
+.lore-card-options #lore-priority { width: 92px; }
+.lore-card-options > .memory-auto { min-height: 38px; }
+.lore-card-actions #lore-delete-card { margin-inline-start: auto; }
+.lore-discussion { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-width: 0; min-height: 0; border-inline-start: 1px solid var(--line); }
+.lore-discussion-header { padding: 16px var(--note-gutter) 8px; }
+.lore-discussion-actions { gap: 6px 8px; }
+.lore-conversation .note-empty { margin-top: 0; }
+.lore-conversation .note-draft h3 { font-size: 14px; }
+.lore-quick-list { min-inline-size: 0; border: 0; padding: 0; margin: 0; }
+.lore-quick-list h3 { margin: 0 0 6px; font-size: 13px; }
+.lore-quick-list ul { list-style: none; margin: 0 0 16px; padding: 0; }
+.lore-quick-list li { padding-block: 7px; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.lore-quick-list strong { font-size: 13px; }
+.lore-quick-options { display: flex; flex-wrap: wrap; gap: 0 12px; }
+.lore-quick-options label { display: inline-flex; align-items: center; gap: 5px; min-height: 24px; font-size: 12px; }
+.lore-quick-options input { margin: 0; accent-color: var(--accent); }
+#lore-quick-status:empty { display: none; }
 .lore-delete-dialog { padding: 16px; gap: 9px; }
 .lore-delete-dialog .compact-actions { justify-content: flex-end; }
-.lore-assistant { display: grid; gap: 8px; margin: 0 11px; padding: 12px 0; border-top: 1px solid var(--line); min-width: 0; }
-.lore-assistant h3, .lore-assistant h4 { margin: 0; font-size: 13px; }
-.lore-assistant h3:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-.lore-assistant .assistant-composer { display: grid; gap: 6px; }
-.lore-assistant textarea.writing-field { min-height: 62px; }
-.lore-assistant .assistant-draft { padding: 8px 0; border-block: 1px solid var(--line); }
 .lore-draft-fields { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 8px; margin: 7px 0 9px; font-size: 12px; line-height: 1.55; }
 .lore-draft-fields dt { color: var(--muted); }
 .lore-draft-fields dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -420,12 +454,20 @@
   border: 1px solid var(--line);
   border-radius: 8px;
 }
-.request-preview-data { display: grid; gap: 13px; min-width: 0; }
+.request-preview-data { display: grid; grid-template-columns: minmax(0, 1fr); gap: 13px; min-width: 0; }
 .request-preview-data h3, .file-section h3 { font-size: 13px; margin-bottom: 3px; }
-.request-blocks, .request-json { border-top: 1px solid var(--line); }
-.request-blocks details { border-bottom: 1px solid var(--line); }
+#request-preview-status:empty { margin: 0; }
+.request-json { border-top: 1px solid var(--line); }
 .request-preview summary { cursor: pointer; padding: 7px 0; font-size: 13px; font-weight: 700; }
 .request-preview pre { white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; max-height: 240px; margin: 0 0 8px; font: inherit; font-size: 13px; }
+.lore-preview-fields { min-inline-size: 0; margin: 5px 0 0; padding: 0; border: 0; }
+.lore-preview-list { list-style: none; margin: 0; padding: 0; }
+.lore-preview-list details { border-bottom: 1px solid var(--line); }
+.lore-preview-list p { color: var(--muted); }
+.lore-preview-list pre { margin-block: 4px 8px; }
+#lore-omitted-list { padding-inline-start: 10px; }
+.lore-preview-choice { display: inline-flex; align-items: center; gap: 5px; padding-block: 4px 8px; }
+.lore-preview-choice input { margin: 0; accent-color: var(--accent); }
 .evidence-list li { margin-top: 4px; overflow-wrap: anywhere; font-size: 13px; }
 .evidence-list li p { white-space: pre-wrap; line-height: 1.55; }
 .evidence-list button { text-align: left; padding-inline: 0; }

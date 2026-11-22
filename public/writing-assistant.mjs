@@ -1,9 +1,11 @@
 import { requestCompletion } from './completion.js'
 import { withModelOptions } from './model-options.mjs'
 import { loreCardFields, validLoreCardFields } from './project-files.mjs'
+import { memoryForPrompt } from './manuscript-memory.mjs'
+import { activeLore } from './retrieval.mjs'
 import {
   assistantHistoryTurns, assistantMessageLimit, assistantNoteDraftLimit, assistantReplyLimit,
-  noteKinds, referenceLabels, writingFieldPrefix, writingFields,
+  projectNotesForRequest, writingFieldPrefix, writingFields,
 } from './writing-config.mjs'
 
 export { assistantMessageLimit, assistantNoteDraftLimit }
@@ -11,14 +13,18 @@ export { assistantMessageLimit, assistantNoteDraftLimit }
 const formatCount = new Intl.NumberFormat('ko-KR')
 
 export function projectNotesLimitHint(project) {
-  const limited = Object.keys(noteKinds).flatMap(field => {
-    const text = project[field] ?? ''
-    if (text.length <= writingFields[field]) return []
-    const sent = writingFieldPrefix(field, text).length
-    return [referenceLabels[field] + ' ' + formatCount.format(text.length) + '자 중 ' +
-      formatCount.format(sent) + '자']
-  })
-  return limited.length ? 'AI에 보내는 분량이 제한돼요. ' + limited.join(', ') + '만 전송해요.' : ''
+  if (project.synopsis.length <= writingFields.synopsis) return ''
+  const sent = writingFieldPrefix('synopsis', project.synopsis).length
+  return `도우미에는 줄거리 ${formatCount.format(project.synopsis.length)}자 중 ${formatCount.format(sent)}자만 보내요.`
+}
+
+export function assistantProjectContext(project, message) {
+  const lore = activeLore(project.lorebook ?? [], project.manuscript, message)
+  return {
+    ...projectNotesForRequest(project),
+    lorebook: writingFieldPrefix('lorebook', lore.text),
+    manuscriptMemory: memoryForPrompt(project),
+  }
 }
 
 function parseReply(text, kind, truncated) {

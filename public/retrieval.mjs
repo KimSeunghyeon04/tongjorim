@@ -1,12 +1,12 @@
 import { defaultSourceLimits, writingFields } from './writing-config.mjs'
 
-export const loreKinds = { character: '인물', place: '장소', event: '사건', clue: '복선' }
+export const loreKinds = { character: '인물', world: '세계관', place: '장소', event: '사건', clue: '복선' }
 export const defaultEmbeddingModel = 'qwen/qwen3-embedding-4b'
 export const searchFor = project => project.search ?? { enabled: false, model: defaultEmbeddingModel }
 export const embeddingBatchSize = 16
 export const embeddingQueryLimit = 2400
 export const chunkLimit = 900
-export const loreLimits = { cards: 150, names: 100, aliases: 16, description: 1800 }
+export const loreLimits = { names: 100, aliases: 16, description: 1800 }
 const loreMatchWindow = 18_000
 
 const wordBoundary = '[\\p{L}\\p{M}\\p{N}]'
@@ -19,23 +19,26 @@ function includesAlias(text, alias) {
   return new RegExp(`(?<!${wordBoundary})${escaped}(?:${koreanParticle})?(?!${wordBoundary})`, 'u').test(text)
 }
 
-export function activeLore(cards, manuscript, direction) {
+export function activeLore(cards, manuscript, direction, added = []) {
   const text = normalize(`${manuscript.slice(-loreMatchWindow)}\n${direction}`)
-  const matches = cards.flatMap(card => {
+  const requested = new Set(added)
+  const candidates = cards.map(card => {
     const keywords = [...new Set([card.name, ...card.aliases])].filter(alias => includesAlias(text, alias))
-    if (!card.always && !keywords.length) return []
+    const manual = requested.has(card.id)
     const block = `[${loreKinds[card.kind]}] ${card.name}\n${card.description}`
-    return [{ ...card, keywords, block }]
+    return { ...card, keywords, manual, block, included: card.always || manual }
   }).sort((a, b) => b.priority - a.priority)
 
-  let used = 0
-  const included = matches.filter(({ block }) => {
-    const added = block.length + (used ? 2 : 0)
-    if (used + added > writingFields.lorebook) return false
-    used += added
-    return true
-  })
-  return { included, text: included.map(card => card.block).join('\n\n') }
+  let used = candidates.filter(card => card.included).reduce((length, card) => length + card.block.length + (length ? 2 : 0), 0)
+  for (const card of candidates) {
+    if (card.included || !card.keywords.length) continue
+    const next = used + card.block.length + (used ? 2 : 0)
+    if (next > writingFields.lorebook) continue
+    card.included = true
+    used = next
+  }
+  const included = candidates.filter(card => card.included)
+  return { candidates, included, text: included.map(card => card.block).join('\n\n') }
 }
 
 export function paragraphRanges(manuscript) {
