@@ -146,18 +146,26 @@ export function setupSourcePanel({ get, currentProject, getModel, research, save
     render()
     inputs[0][1].focus()
   })
-  save.addEventListener('click', () => {
-    const previous = project.sourceLimits
-    project.sourceLimits = edits()
-    if (saveWorkspace()) {
+  save.addEventListener('click', async () => {
+    const target = project
+    const limits = edits()
+    const saved = await saveWorkspace(() => {
+      const previous = target.sourceLimits
+      target.sourceLimits = limits
+      return () => {
+        if (target.sourceLimits !== limits) return
+        if (previous === undefined) delete target.sourceLimits
+        else target.sourceLimits = previous
+      }
+    })
+    if (target !== project) return
+    if (saved) {
       resetInputs()
       onSave()
       message('이 작품의 분량을 저장했어요.')
       panel.querySelector('summary').focus()
       return
     }
-    if (previous) project.sourceLimits = previous
-    else delete project.sourceLimits
     render()
     message('분량을 저장하지 못했어요. 작업 공간 저장 상태를 확인해 주세요.')
   })

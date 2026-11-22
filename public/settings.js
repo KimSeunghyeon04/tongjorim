@@ -4,7 +4,7 @@ import { modelOptionsFor, reasoningEfforts, samplingRanges, validModelOptions } 
 import { formatCost, jsonRequest } from './request-tools.mjs'
 import { searchFor } from './retrieval.mjs'
 import { currentProjectOf, projectName, readWorkspace } from './writing-workspace.mjs'
-import { cacheWorkspace, openWorkspaceStorage, readCachedWorkspace, storageKey, workspaceStorageStatus } from './workspace-storage.mjs'
+import { cacheWorkspace, openWorkspaceStorage, readCachedWorkspace, storageConflictMessage, storageKey, workspaceStorageStatus } from './workspace-storage.mjs'
 import { optionalProjectModels, validModelId, validWritingTokenLimit } from './writing-config.mjs'
 
 const get = id => document.getElementById(id)
@@ -202,10 +202,11 @@ function setupSettings(root) {
     get('model-zdr').focus()
   }
 
-  function saveOptions(event) {
+  async function saveOptions(event) {
     event.preventDefault()
-    if (!optionsEditor) return
-    const { model, projectId, previous } = optionsEditor
+    const editor = optionsEditor
+    if (!editor) return
+    const { model, projectId, previous } = editor
     const options = {}
     for (const { field, path } of optionFields) {
       const value = optionValue(field)
@@ -220,7 +221,7 @@ function setupSettings(root) {
       return
     }
     try {
-      saveProjectSetting(projectId, project => {
+      await saveProjectSetting(projectId, project => {
         if (JSON.stringify(modelOptionsFor(project, model) ?? {}) !== previous) {
           throw new Error('다른 탭에서 이 모델의 상세설정이 바뀌었어요. 다시 열어 최신 값을 확인해 주세요.')
         }
@@ -230,8 +231,9 @@ function setupSettings(root) {
         if (Object.keys(profiles).length) project.modelOptions = profiles
         else delete project.modelOptions
       })
-      closeOptions()
+      if (optionsEditor === editor) closeOptions()
     } catch (error) {
+      if (optionsEditor !== editor) return
       optionsError.textContent = error instanceof DOMException
         ? '브라우저에 상세설정을 저장하지 못했어요.' : error.message
       optionsError.hidden = false
@@ -261,14 +263,17 @@ function setupSettings(root) {
     renderProjects(preferred)
   }
 
-  function saveProjectSetting(projectId, update) {
+  async function saveProjectSetting(projectId, update) {
     const latest = readCachedWorkspace()
     const next = latest === null && serializedWorkspace === null ? structuredClone(workspace) : readWorkspace(latest)
     const project = next.projects.find(item => item.id === projectId)
     if (!project) throw new Error('선택한 작품을 찾을 수 없어요.')
     update(project)
     const serialized = JSON.stringify(next)
-    const saved = cacheWorkspace(serialized)
+    const { saved } = await cacheWorkspace(current => {
+      if (current !== latest && current !== serialized) throw new Error(storageConflictMessage)
+      return serialized
+    })
     serializedWorkspace = serialized
     workspace = next
     renderProjects(projectId)
@@ -280,18 +285,21 @@ function setupSettings(root) {
     notifyChange(storageKey)
   }
 
-  function chooseModel(id) {
-    const { key, projectId } = picker
+  async function chooseModel(id) {
+    const selection = picker
+    const { key, projectId } = selection
     try {
-      saveProjectSetting(projectId, project => {
+      await saveProjectSetting(projectId, project => {
         if (key === 'embedding') project.search = { ...searchFor(project), model: id }
         else if (id) project[key] = id
         else delete project[key]
       })
-      dialog.close()
-    } catch {
+      if (picker === selection && dialog.open) dialog.close()
+    } catch (failure) {
+      if (picker !== selection || !dialog.open) return
       const error = get('model-save-error')
-      error.textContent = '모델을 저장하지 못했어요. 작품이나 브라우저 저장 공간을 확인해 주세요.'
+      error.textContent = failure.message === storageConflictMessage
+        ? storageConflictMessage : '모델을 저장하지 못했어요. 작품이나 브라우저 저장 공간을 확인해 주세요.'
       error.hidden = false
     }
   }
@@ -443,7 +451,7 @@ function setupSettings(root) {
     loadCatalog(catalogFor(picker.key))
   })
   projectSelect.addEventListener('change', renderSettings)
-  function saveGenerationLimit() {
+  async function saveGenerationLimit() {
     const project = selectedProject()
     if (!project) return
     const maxTokens = limit.valueAsNumber
@@ -454,10 +462,12 @@ function setupSettings(root) {
     }
     if (maxTokens === project.maxTokens) return
     try {
-      saveProjectSetting(project.id, latest => { latest.maxTokens = maxTokens })
-    } catch {
-      renderSettings()
-      limitError.textContent = '저장하지 못했어요. 브라우저 저장 공간을 확인해 주세요.'
+      await saveProjectSetting(project.id, latest => { latest.maxTokens = maxTokens })
+    } catch (error) {
+      if (error.message === storageConflictMessage) loadWorkspace(project.id)
+      else renderSettings()
+      limitError.textContent = error.message === storageConflictMessage
+        ? storageConflictMessage : '저장하지 못했어요. 브라우저 저장 공간을 확인해 주세요.'
     }
   }
   limit.addEventListener('input', () => { limitError.textContent = '' })

@@ -460,8 +460,12 @@ async function streamCompletion(req, res, completionFor, maxBytes) {
         const event = JSON.parse(data)
         const choice = event.choices?.[0]
         if (choice?.finish_reason) exchange.response.finishReason = choice.finish_reason
-        if (event.error || choice?.finish_reason === 'error') {
-          throw new RequestError(502, upstreamErrors[event.error?.code] ?? '모델이 답변을 중단했어요. 다시 시도해 주세요.')
+        const error = event.error ?? choice?.error
+        if (error || choice?.finish_reason === 'error') {
+          throw new RequestError(502, upstreamErrors[error?.code] ?? '모델이 답변을 중단했어요. 다시 시도해 주세요.')
+        }
+        if (choice?.finish_reason === 'content_filter') {
+          throw new RequestError(502, '모델의 콘텐츠 필터가 답변을 중단했어요.')
         }
         if (modelIdPattern.test(event.model)) actualModel = event.model
         if (event.usage) {
@@ -519,12 +523,13 @@ const server = createServer(async (req, res) => {
     } else if (req.method === 'GET' && path === '/api/workspace') {
       json(res, 200, store.readWorkspace())
     } else if (req.method === 'POST' && path === '/api/workspace') {
-      const { revision, snapshot } = (await readJsonRequest(req, workspaceRequestBytes)) ?? {}
-      if (typeof snapshot !== 'string' || (revision !== null && (!Number.isSafeInteger(revision) || revision < 1))) {
+      const { revision, snapshot, attempt } = (await readJsonRequest(req, workspaceRequestBytes)) ?? {}
+      if (typeof snapshot !== 'string' || (revision !== null && (!Number.isSafeInteger(revision) || revision < 1)) ||
+          (attempt !== undefined && (typeof attempt !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(attempt)))) {
         throw new RequestError(400, '작품 저장 형식이 올바르지 않아요.')
       }
       try { readWorkspace(snapshot) } catch { throw new RequestError(400, '작업공간을 읽을 수 없어요.') }
-      const result = store.saveWorkspace(revision, snapshot)
+      const result = store.saveWorkspace(revision, snapshot, attempt)
       json(res, result.conflict ? 409 : 200, result)
     } else if (req.method === 'POST' && path === '/api/write') {
       await streamCompletion(req, res, writingCompletion, writingRequestBytes)

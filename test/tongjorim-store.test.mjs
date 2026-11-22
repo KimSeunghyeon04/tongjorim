@@ -45,3 +45,19 @@ test('저장한 작품과 모델 원문은 파일을 다시 열어도 함께 조
     rmdirSync(directory)
   }
 })
+
+test('저장 충돌은 같은 시도의 직전 반영만 구별하며 오래된 원고를 덮어쓰지 않는다', () => {
+  const store = openTongjorimStore(':memory:')
+  try {
+    assert.deepEqual(store.saveWorkspace(null, 'first', 'one'), { revision: 1 })
+    assert.deepEqual(store.saveWorkspace(null, 'second', 'one'),
+      { conflict: true, revision: 1, snapshot: 'first', committedAttempt: true })
+    assert.deepEqual(store.saveWorkspace(null, 'second', 'unrelated'),
+      { conflict: true, revision: 1, snapshot: 'first' })
+    assert.deepEqual(store.saveWorkspace(1, 'second', 'two'), { revision: 2 })
+    assert.deepEqual(store.saveWorkspace(null, 'first', 'one'),
+      { conflict: true, revision: 2, snapshot: 'second' })
+  } finally {
+    store.close()
+  }
+})

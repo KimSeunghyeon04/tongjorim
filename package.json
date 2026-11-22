@@ -7,6 +7,7 @@
     "start": "node server.mjs",
     "test": "node --test",
     "qa:server": "node scripts/qa-server.mjs",
+    "qa:stream": "node scripts/stream-live.mjs",
     "qa:retrieval": "node scripts/retrieval-live.mjs"
   }
 }

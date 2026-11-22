@@ -211,32 +211,42 @@ export function setupLorebook({ get, currentProject, saveWorkspace, onChange, ad
     if (focusId) get(focusId)?.focus({ preventScroll: true })
   }
 
-  function saveCards(project, cards) {
+  async function saveCards(project, cards) {
     const previous = project.lorebook
-    project.lorebook = cards
-    if (!saveWorkspace()) {
-      if (previous === undefined) delete project.lorebook
-      else project.lorebook = previous
-      return false
-    }
-    sessionFor(project).cards = cards
-    onChange()
-    return true
+    let changed = false
+    const saved = await saveWorkspace(() => {
+      if (project.lorebook !== previous) return
+      project.lorebook = cards
+      sessionFor(project).cards = cards
+      changed = true
+      return () => {
+        if (project.lorebook !== cards) return
+        if (previous === undefined) delete project.lorebook
+        else project.lorebook = previous
+        sessionFor(project).cards = previous
+        changed = false
+      }
+    })
+    if (changed && project === currentProject()) onChange()
+    return saved && changed
   }
 
-  function toggleAlways(card, input) {
+  async function toggleAlways(card, input) {
     const project = currentProject()
     const session = sessionFor(project)
     const cards = session.cards ?? []
     const current = cards.find(item => item.id === card.id)
-    if (!current || !saveCards(project, cards.map(item => item === current ? { ...item, always: input.checked } : item))) {
+    const checked = input.checked
+    const saved = current && await saveCards(project, cards.map(item => item === current ? { ...item, always: checked } : item))
+    if (project !== currentProject()) return
+    if (!saved) {
       input.checked = current?.always ?? card.always
       get('lore-quick-status').textContent = '포함 설정을 저장하지 못했어요.'
       return
     }
     const entry = session.entries.get(card.id)
-    if (entry?.values) entry.values[cardInputs.indexOf(alwaysField)] = input.checked
-    if (entry === editing) alwaysField.checked = input.checked
+    if (entry?.values) entry.values[cardInputs.indexOf(alwaysField)] = checked
+    if (entry === editing) alwaysField.checked = checked
     get('lore-quick-status').textContent = ''
     renderQuick(input.id)
   }
@@ -292,24 +302,27 @@ export function setupLorebook({ get, currentProject, saveWorkspace, onChange, ad
     selectEditor(undefined)
     get('lore-name').focus()
   })
-  form.addEventListener('submit', event => {
+  form.addEventListener('submit', async event => {
     event.preventDefault()
     const project = currentProject()
     const session = sessionFor(project)
     const cards = session.cards ?? []
-    const { cardId } = editing
+    const entry = editing
+    const { cardId } = entry
     const card = { id: cardId ?? crypto.randomUUID(), ...readFields() }
     if (!validLoreCard(card)) {
       formStatus.textContent = `이름과 설명을 입력해 주세요. 별칭은 ${loreLimits.aliases}개까지 저장할 수 있어요.`
       return
     }
-    if (!saveCards(project, cardId ? cards.map(item => item.id === cardId ? card : item) : [...cards, card])) {
-      formStatus.textContent = '카드를 저장하지 못했어요. 편집 내용은 입력란에 남아 있어요.'
+    if (!await saveCards(project, cardId ? cards.map(item => item.id === cardId ? card : item) : [...cards, card])) {
+      if (entry === editing) formStatus.textContent = '카드를 저장하지 못했어요. 편집 내용은 입력란에 남아 있어요.'
       return
     }
     session.entries.delete(cardId)
-    session.entries.set(card.id, editing)
-    editing.cardId = session.selectedId = card.id
+    session.entries.set(card.id, entry)
+    entry.cardId = card.id
+    if (entry !== editing) return
+    session.selectedId = card.id
     writeFields(card)
     syncEditorLabels(card)
     renderPicker()
@@ -330,7 +343,7 @@ export function setupLorebook({ get, currentProject, saveWorkspace, onChange, ad
     deleteDialog.showModal()
   })
   deleteDialog.addEventListener('cancel', () => { requestedDeletion = undefined })
-  deleteDialog.querySelector('form').addEventListener('submit', event => {
+  deleteDialog.querySelector('form').addEventListener('submit', async event => {
     event.preventDefault()
     const deletion = requestedDeletion
     requestedDeletion = undefined
@@ -341,34 +354,40 @@ export function setupLorebook({ get, currentProject, saveWorkspace, onChange, ad
     const cards = session.cards ?? []
     const index = cards.findIndex(item => item.id === card.id)
     if (index < 0) return
-    if (!saveCards(project, cards.filter((_, position) => position !== index))) {
+    if (!await saveCards(project, cards.filter((_, position) => position !== index))) {
       session.status = '카드를 삭제하지 못했어요.'
     } else {
       session.deletions.push({ card: cards[index], index })
       session.status = `‘${card.name}’ 카드를 삭제했어요.`
-      selectEditor(undefined)
-      renderPicker()
-      renderQuick()
+      if (project === currentProject()) {
+        if (editing.cardId === card.id) selectEditor(undefined)
+        renderPicker()
+        renderQuick()
+      }
     }
+    if (project !== currentProject()) return
     renderFeedback()
     get(session.deletions.length ? 'lore-undo-delete' : 'lore-delete-card').focus()
   })
-  get('lore-undo-delete').addEventListener('click', () => {
+  get('lore-undo-delete').addEventListener('click', async () => {
     const project = currentProject()
     const session = sessionFor(project)
     const deletion = session.deletions.at(-1)
     if (!deletion) return
     const cards = [...(session.cards ?? [])]
     cards.splice(deletion.index, 0, deletion.card)
-    if (saveCards(project, cards)) {
+    if (await saveCards(project, cards)) {
       session.deletions.pop()
       session.status = `‘${deletion.card.name}’ 카드를 복구했어요.`
-      selectEditor(deletion.card.id)
-      renderPicker()
-      renderQuick()
+      if (project === currentProject()) {
+        selectEditor(deletion.card.id)
+        renderPicker()
+        renderQuick()
+      }
     } else {
       session.status = '카드를 복구하지 못했어요.'
     }
+    if (project !== currentProject()) return
     renderFeedback()
     if (session.deletions.length) get('lore-undo-delete').focus()
     else picker.focus()

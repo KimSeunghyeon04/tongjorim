@@ -19,6 +19,12 @@ const models = ['write', 'memory', 'revise', 'plan'].map(name => ({
   pricing: { prompt: '0.000002', completion: '0.000003', request: '0.0001' },
 }))
 
+const streamEndings = {
+  'qa/filtered': { finish_reason: 'content_filter' },
+  'qa/choice-error': { error: { code: 502, message: 'Mock choice failed' } },
+  'qa/truncated': { finish_reason: 'length' },
+}
+
 const originalFetch = globalThis.fetch
 globalThis.fetch = async (url, options) => {
   if (typeof url !== 'string' || !url.startsWith(upstream)) return originalFetch(url, options)
@@ -53,6 +59,8 @@ globalThis.fetch = async (url, options) => {
     return Response.json({ data, usage: { prompt_tokens: 31, total_tokens: 31, cost: 0.000031 } })
   }
   let text = { 'qa/write': '나래는 마지막 표를 접어 두었다.', 'qa/memory': '나래가 마지막 표를 접어 두었다.', 'qa/revise': '나래는 수정된 표를 손에 쥐었다.' }[body.model]
+  const ending = Object.hasOwn(streamEndings, body.model) ? streamEndings[body.model] : undefined
+  if (ending) text = '나래는 마지막 표를...'
   if (body.model === 'qa/plan') {
     const { card, mode, noteAction, request } = JSON.parse(body.messages.at(-1).content)
     const reply = mode === 'draft' ? '작품 설정을 토대로 초안을 만들었어요.' : `요청을 검토했어요. ${request}`
@@ -62,7 +70,8 @@ globalThis.fetch = async (url, options) => {
   }
   if (!text) return Response.json({ error: { message: 'Unexpected model' } }, { status: 400 })
   const events = [
-    { model: body.model, choices: [{ delta: { content: text }, finish_reason: 'stop' }] },
+    { model: body.model, choices: [{ delta: { content: text }, ...(ending ? {} : { finish_reason: 'stop' }) }] },
+    ...(ending ? [{ model: body.model, choices: [{ delta: { content: '' }, ...ending }] }] : []),
     { model: body.model, choices: [], usage: body.model === 'qa/revise' ? {} :
       { prompt_tokens: 120, completion_tokens: 12, total_tokens: 132, cost: 0.00123 } },
   ]

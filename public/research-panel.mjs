@@ -129,25 +129,25 @@ export function setupResearch({ get, currentProject, saveWorkspace, onChange, go
     }
     if (!local.inputs.has(cutoff)) {
       if (cutoff > 0) local.corpus ??= chunkManuscript(manuscript)
-      const input = retrievalInput(manuscript, direction, recent, { cutoff, corpus: local.corpus })
+      const input = { ...retrievalInput(manuscript, direction, recent, { cutoff, corpus: local.corpus }), corpus: local.corpus }
       if (local.inputs.size >= 4) local.inputs.delete(local.inputs.keys().next().value)
       local.inputs.set(cutoff, input)
     }
     return local.inputs.get(cutoff)
   }
 
-  function startSearch(project, references, search, { chunks, query }) {
+  function startSearch(project, references, search, input) {
     forget(project)
     const controller = new AbortController()
     const modelOptions = modelOptionsFor(project, search.model)
     const entry = { ...search, modelOptions, routeKey: embeddingRouteKey(search.model, modelOptions),
       manuscript: project.manuscript, direction: project.direction,
-      recent: references.includes('manuscript'), chunkCount: chunks.length, status: '관련 원문 찾는 중…', controller, pending: true, waiters: 0 }
+      recent: references.includes('manuscript'), chunkCount: input.chunks.length, status: '관련 원문 찾는 중…', controller, pending: true, waiters: 0 }
     cache.set(project, entry)
     const show = () => { if (project === currentProject()) renderState() }
     entry.promise = (async () => {
       try {
-        entry.semantic = await embedPast(project.id, entry, chunks, query, controller.signal, estimate => {
+        entry.semantic = await embedPast(project.id, entry, input, controller.signal, estimate => {
           entry.estimate = estimate
           show()
         }, usage => {

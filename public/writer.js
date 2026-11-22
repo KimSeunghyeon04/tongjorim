@@ -3,13 +3,13 @@ import { withModelOptions } from './model-options.mjs'
 import {
   appendParagraphs, completionPayload, defaultLoreSystemPrompt, defaultMemoryPrompt, defaultNoteSystemPrompt, defaultRevisionPrompt, defaultSystemPrompt,
   effectiveSystemPrompt, memoryOutputLimit, modelFor, normalizeLineEndings, noteDraftActions, noteKinds,
-  systemPromptLimit, writingFields,
+  systemPromptLimit, writingFieldPrefix, writingFields,
 } from './writing-config.mjs'
 import { assistantMessageLimit, assistantNoteDraftLimit, assistantProjectContext, createWritingAssistant, projectNotesLimitHint } from './writing-assistant.mjs'
 import { memoryForPrompt, memoryReadThrough, memoryRequest, setManuscriptText, updateManuscriptMemory } from './manuscript-memory.mjs'
 import { exportPack, exportProject, readPack, readProject } from './project-files.mjs'
 import { currentProjectOf, makeProject, mergeModelSettings, projectName, readWorkspace } from './writing-workspace.mjs'
-import { cacheWorkspace, openWorkspaceStorage, readCachedWorkspace, storageKey, workspaceStatusEvent, workspaceStorageStatus } from './workspace-storage.mjs'
+import { cacheWorkspace, openWorkspaceStorage, readCachedWorkspace, storageConflictMessage, storageKey, workspaceStatusEvent, workspaceStorageStatus } from './workspace-storage.mjs'
 import { setupResearch } from './research-panel.mjs'
 import { setupLorebook } from './lorebook-panel.mjs'
 import { setupSourcePanel } from './source-panel.mjs'
@@ -87,7 +87,6 @@ let manuscriptLineStarts = [0]
 let savedVersion
 let storageReadable = true
 let storageWarning = ''
-const storageConflictMessage = '다른 탭에서 작품이 바뀌어 이 탭의 변경을 저장할 수 없어요.'
 
 function loadWorkspace() {
   try {
@@ -103,6 +102,7 @@ function loadWorkspace() {
 
 await openWorkspaceStorage()
 const workspace = loadWorkspace()
+const openedSnapshot = storageReadable && savedVersion != null ? savedVersion : JSON.stringify(workspace)
 const currentProject = () => currentProjectOf(workspace)
 const planAssistant = createWritingAssistant({
   transcript: planTranscript,
@@ -149,19 +149,27 @@ function syncSavedWorkspace(latest) {
   return true
 }
 
-function saveWorkspace() {
+async function saveWorkspace(change) {
   if (storageReadable) {
+    let previousVersion
+    let nextVersion
+    let rollback
     try {
-      if (!syncSavedWorkspace(readCachedWorkspace())) {
-        storageWarning = storageConflictMessage
-      } else {
-        const nextVersion = JSON.stringify(workspace)
-        void cacheWorkspace(nextVersion)
+      await cacheWorkspace(latest => {
+        if (!syncSavedWorkspace(latest)) throw new Error(storageConflictMessage)
+        previousVersion = savedVersion
+        rollback = change?.()
+        nextVersion = JSON.stringify(workspace)
         savedVersion = nextVersion
-        storageWarning = ''
+        return nextVersion
+      })
+      storageWarning = ''
+    } catch (error) {
+      if (nextVersion !== undefined && savedVersion === nextVersion) {
+        rollback?.()
+        savedVersion = previousVersion
       }
-    } catch {
-      storageWarning = '브라우저에 저장할 수 없어요.'
+      storageWarning = error.message === storageConflictMessage ? storageConflictMessage : '브라우저에 저장할 수 없어요.'
     }
   }
   showStorageStatus()
@@ -567,7 +575,8 @@ async function continueManuscript() {
     if (currentProject() !== project || project.manuscript !== original) {
       throw new Error('생성 중 원고가 바뀌었어요. 현재 원고에서 다시 요청해 주세요.')
     }
-    if (project.authorMode === 'once' && project.direction === oneTimeNote && body.draft.direction === oneTimeNote) {
+    if (project.authorMode === 'once' && project.direction === oneTimeNote &&
+        body.draft.direction === writingFieldPrefix('direction', oneTimeNote)) {
       project.direction = ''
       get('direction').value = ''
     }
@@ -691,8 +700,8 @@ async function refreshProjectMemory(project) {
     let snapshot
     do {
       snapshot = job.requestedManuscript
-      await updateManuscriptMemory(project, snapshot, controller.signal, () => {
-        if (!saveWorkspace()) throw new Error('메모를 브라우저에 저장할 수 없어 갱신을 멈췄어요.')
+      await updateManuscriptMemory(project, snapshot, controller.signal, async () => {
+        if (!await saveWorkspace()) throw new Error('메모를 브라우저에 저장할 수 없어 갱신을 멈췄어요.')
         refreshVisible()
         if (project === currentProject()) writingInputsChanged()
       }, usage => {
@@ -783,21 +792,24 @@ function planDraftResult(target, original, action, draft) {
   return { text: result, message }
 }
 
-function savePlanNote(target, text, rollbackOnFailure) {
+async function savePlanNote(target, text, rollbackOnFailure) {
   const project = currentProject()
-  const previous = project[target]
-  project[target] = text
-  const saved = saveWorkspace()
-  if (!saved && rollbackOnFailure) project[target] = previous
+  const update = () => {
+    const previous = project[target]
+    project[target] = text
+    return () => { if (project[target] === text) project[target] = previous }
+  }
+  if (!rollbackOnFailure) update()
+  const saved = await saveWorkspace(rollbackOnFailure ? update : undefined)
   const field = get(target)
-  field.value = project[target] ?? ''
+  if (project === currentProject()) field.value = project[target] ?? ''
   return { saved, field }
 }
 
 function updatePlanControls() {
   const planning = planAssistant.busy
   const target = 'synopsis'
-  const { action, drafts, lastReplacement } = currentPlanEntry()
+  const { action, drafts, lastReplacement, saving } = currentPlanEntry()
   const replacing = action === 'replace'
   const draft = drafts[action]
   const original = currentProject()[target] ?? ''
@@ -816,7 +828,7 @@ function updatePlanControls() {
   get('plan-empty').hidden = !planTranscript.hidden || draft !== null
   get('plan-show-draft').hidden = draft === null
   planUndoReplacement.hidden = !lastReplacement || lastReplacement.after !== original
-  planUndoReplacement.disabled = planning
+  planUndoReplacement.disabled = planning || saving
   const { text, message } = planDraftResult(target, original, action, draft)
   const status = get('note-draft-status')
   status.hidden = !message
@@ -824,7 +836,7 @@ function updatePlanControls() {
   planDraftText.readOnly = planning
   get('plan-discard').disabled = planning
   planAccept.textContent = replacing ? '기존 메모 교체' : '메모에 추가'
-  planAccept.disabled = planning || Boolean(message) || !text
+  planAccept.disabled = planning || saving || Boolean(message) || !text
 }
 
 async function sendPlanMessage(mode) {
@@ -1136,7 +1148,7 @@ get('plan-discard').addEventListener('click', () => {
   updatePlanControls()
   planIdea.focus()
 })
-planAccept.addEventListener('click', () => {
+planAccept.addEventListener('click', async () => {
   const target = 'synopsis'
   const entry = currentPlanEntry()
   const { action, drafts } = entry
@@ -1145,7 +1157,11 @@ planAccept.addEventListener('click', () => {
   const { text, message } = planDraftResult(target, original, action, drafts[action])
   if (!text || message) return
   const replacing = action === 'replace'
-  const { saved, field } = savePlanNote(target, text, replacing)
+  entry.saving = true
+  updatePlanControls()
+  const { saved, field } = await savePlanNote(target, text, replacing)
+  entry.saving = false
+  updatePlanControls()
   if (replacing && !saved) {
     planStatus.textContent = '브라우저에 저장하지 못했어요. 기존 메모와 수정안은 그대로 있어요.'
     writingInputsChanged()
@@ -1163,12 +1179,16 @@ planAccept.addEventListener('click', () => {
   field.setSelectionRange(text.length, text.length)
   field.scrollTop = field.scrollHeight
 })
-planUndoReplacement.addEventListener('click', () => {
+planUndoReplacement.addEventListener('click', async () => {
   const target = 'synopsis'
   const entry = currentPlanEntry()
   const replacement = entry.lastReplacement
-  if (!replacement || planAssistant.busy || replacement.after !== (currentProject()[target] ?? '')) return
-  const { saved } = savePlanNote(target, replacement.before, true)
+  if (!replacement || planUndoReplacement.disabled || replacement.after !== (currentProject()[target] ?? '')) return
+  entry.saving = true
+  updatePlanControls()
+  const { saved } = await savePlanNote(target, replacement.before, true)
+  entry.saving = false
+  updatePlanControls()
   if (saved) {
     entry.lastReplacement = null
     planIdea.focus()
@@ -1312,7 +1332,7 @@ deleteProjectDialog.addEventListener('close', () => {
 get('delete-project-backup').addEventListener('click', () => {
   if (pendingProjectDeletion === currentProject()) downloadProjectBackup()
 })
-get('delete-project-form').addEventListener('submit', event => {
+get('delete-project-form').addEventListener('submit', async event => {
   event.preventDefault()
   const project = pendingProjectDeletion
   const status = get('delete-project-status')
@@ -1322,15 +1342,20 @@ get('delete-project-form').addEventListener('submit', event => {
     return
   }
 
-  const previous = workspace.projects
-  const index = previous.indexOf(project)
-  const remaining = previous.filter(item => item !== project)
-  if (!remaining.length) remaining.push(makeProject())
-  workspace.projects = remaining
-  workspace.activeProjectId = remaining[Math.min(index, remaining.length - 1)].id
-  if (!saveWorkspace()) {
-    workspace.projects = previous
-    workspace.activeProjectId = project.id
+  if (!await saveWorkspace(() => {
+    const previous = workspace.projects
+    const index = previous.indexOf(project)
+    if (index < 0) return
+    const remaining = previous.filter(item => item !== project)
+    if (!remaining.length) remaining.push(makeProject())
+    workspace.projects = remaining
+    workspace.activeProjectId = remaining[Math.min(index, remaining.length - 1)].id
+    return () => {
+      if (workspace.projects !== remaining) return
+      workspace.projects = previous
+      workspace.activeProjectId = project.id
+    }
+  })) {
     status.textContent = storageWarning
     status.hidden = false
     return
@@ -1369,7 +1394,7 @@ function bindProjectImport(action, read, prepare) {
       const text = await file.text()
       if (!filesDialog.open || session !== filesSession) return
       checkImportProject(project)
-      prepare(read(text, packOptions()), project)
+      await prepare(read(text, packOptions()), project)
     } catch (error) {
       if (filesDialog.open && session === filesSession) fileStatus(error.message)
     } finally {
@@ -1377,11 +1402,11 @@ function bindProjectImport(action, read, prepare) {
     }
   })
 }
-bindProjectImport('restore-backup', readProject, restored => {
+bindProjectImport('restore-backup', readProject, async restored => {
   workspace.projects.push(restored)
   workspace.activeProjectId = restored.id
   renderWorkspace()
-  fileStatus(saveWorkspace() ? `‘${projectName(restored)}’을 새 작품으로 복원했어요.` : '불러왔지만 브라우저에 저장할 수 없어요.')
+  fileStatus(await saveWorkspace() ? `‘${projectName(restored)}’을 새 작품으로 복원했어요.` : '불러왔지만 브라우저에 저장할 수 없어요.')
 })
 bindProjectImport('import-pack', readPack, (settings, project) => {
   const details = [`‘${projectName(project)}’의 선택한 설정을 교체해요.`]
@@ -1410,19 +1435,22 @@ get('cancel-pack-import').addEventListener('click', () => {
   fileStatus('설정 가져오기를 취소했어요.')
   get('import-pack').focus()
 })
-get('apply-pack-import').addEventListener('click', () => {
+get('apply-pack-import').addEventListener('click', async () => {
   if (!pendingPack || !filesDialog.open) return
   const { settings, project } = pendingPack
   try {
     checkImportProject(project)
-    const keys = Object.keys(settings)
-    const previous = new Map(keys.filter(key => Object.hasOwn(project, key)).map(key => [key, project[key]]))
-    Object.assign(project, settings)
-    if (!saveWorkspace()) {
-      for (const key of keys) {
-        if (previous.has(key)) project[key] = previous.get(key)
-        else delete project[key]
+    if (!await saveWorkspace(() => {
+      const previous = new Map(Object.keys(settings).map(key => [key, Object.hasOwn(project, key) ? project[key] : undefined]))
+      Object.assign(project, settings)
+      return () => {
+        for (const [key, value] of previous) {
+          if (project[key] !== settings[key]) continue
+          if (value === undefined) delete project[key]
+          else project[key] = value
+        }
       }
+    })) {
       throw new Error('설정을 브라우저에 저장할 수 없어 교체하지 않았어요.')
     }
     renderWorkspace()
@@ -1443,6 +1471,12 @@ function syncWorkspaceFromStorage() {
 
 window.addEventListener('storage', event => {
   if (event.key === storageKey || event.key === null) syncWorkspaceFromStorage()
+})
+window.addEventListener('beforeunload', event => {
+  // A rejected edit can exist only in this tab even after the shared cache has finished saving.
+  if (!storageWarning || JSON.stringify(workspace) === (storageReadable ? savedVersion ?? openedSnapshot : openedSnapshot)) return
+  event.preventDefault()
+  event.returnValue = true
 })
 document.addEventListener(settingsChangeEvent, event => {
   if (event.detail === storageKey) syncWorkspaceFromStorage()

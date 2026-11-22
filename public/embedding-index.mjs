@@ -2,6 +2,7 @@ import { combineUsage, estimateUsage, jsonRequest } from './request-tools.mjs'
 import { embeddingBatchSize } from './retrieval.mjs'
 
 let database
+const corpusHashes = new WeakMap()
 
 function openIndex() {
   database ??= new Promise((resolve, reject) => {
@@ -29,6 +30,20 @@ function openIndex() {
 async function hashText(value) {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
+}
+
+function hashesFor(corpus) {
+  if (!corpusHashes.has(corpus)) {
+    const texts = [...new Set(corpus.map(chunk => chunk.text))]
+    const pending = Promise.all(texts.map(async text => [text, await hashText(text)]))
+      .then(entries => new Map(entries))
+      .catch(error => {
+        corpusHashes.delete(corpus)
+        throw error
+      })
+    corpusHashes.set(corpus, pending)
+  }
+  return corpusHashes.get(corpus)
 }
 
 function recordsFor(db, projectId) {
@@ -60,18 +75,19 @@ function writeIndex(db, signal, { additions = [], removals = [] }) {
   })
 }
 
-export async function embedPast(projectId, { model: modelId, modelOptions, routeKey }, chunks, query, signal, onEstimate, onUsage) {
+export async function embedPast(projectId, { model: modelId, modelOptions, routeKey },
+  { corpus, chunks, query }, signal, onEstimate, onUsage) {
   const catalog = await jsonRequest('/api/embeddings/models', { signal })
   const model = catalog.models.find(item => item.id === modelId)
   if (!model) throw new Error('이 임베딩 모델이 현재 OpenRouter 모델 목록에 없어요.')
-  const texts = [...new Set(chunks.map(chunk => chunk.text))]
-  const hashes = await Promise.all(texts.map(hashText))
+  const hashes = await hashesFor(corpus)
   const db = await openIndex()
   const stored = await recordsFor(db, projectId)
-  const desired = new Map(hashes.map((hash, index) => [hash, texts[index]]))
+  const desired = new Map(chunks.map(({ text }) => [hashes.get(text), text]))
   const records = new Map(stored.filter(entry => entry.model === routeKey && desired.has(entry.hash))
     .map(entry => [entry.hash, entry.vector]))
-  const removals = stored.filter(entry => entry.model !== routeKey || !desired.has(entry.hash))
+  const retained = new Set(hashes.values())
+  const removals = stored.filter(entry => entry.model !== routeKey || !retained.has(entry.hash))
   const missing = [...desired].filter(([hash]) => !records.has(hash))
   onEstimate(estimateUsage([...missing.map(([, value]) => value), query], 0, model,
     Math.ceil(missing.length / embeddingBatchSize) + 1))
@@ -94,11 +110,10 @@ export async function embedPast(projectId, { model: modelId, modelOptions, route
   }
   await writeIndex(db, signal, { removals })
   const [queryVector] = await embed('query', [query])
-  const hashesByText = new Map(hashes.map((hash, index) => [texts[index], hash]))
-  const vectors = chunks.map(chunk => records.get(hashesByText.get(chunk.text)))
+  const vectors = chunks.map(chunk => records.get(hashes.get(chunk.text)))
   if (vectors.some(vector => vector.length !== queryVector.length)) {
     // A provider can replace a model with one that emits a different number of dimensions.
-    const incompatible = [...desired.keys()].map(hash => ({ projectId, model: routeKey, hash }))
+    const incompatible = [...retained].map(hash => ({ projectId, model: routeKey, hash }))
     await writeIndex(db, signal, { removals: incompatible })
     throw new Error('모델의 벡터 길이가 바뀌었어요. 다시 검색하면 새로 색인해요.')
   }

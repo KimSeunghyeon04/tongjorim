@@ -69,6 +69,6 @@ export async function updateManuscriptMemory(project, snapshot, signal, onCheckp
     }
     through = end
     project.manuscriptMemory = { text: memory, through, stale: false }
-    onCheckpoint()
+    await onCheckpoint()
   }
 }

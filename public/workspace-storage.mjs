@@ -2,17 +2,23 @@ import { readWorkspace, storageKey as legacyStorageKey } from './writing-workspa
 
 export const storageKey = 'relay.workspace.sqlite.v1'
 export const workspaceStatusEvent = 'relay:workspace-status'
+export const storageConflictMessage = '다른 탭에서 작품이 바뀌어 이 탭의 변경을 저장할 수 없어요.'
 const conflictMessage = '서버에 더 최근의 작업공간이 있어요. 이 탭의 작업을 JSON으로 백업해 주세요.'
 const unavailableMessage = '서버에 저장할 수 없어요. 통조림 서버 연결을 확인해 주세요.'
 let opening
+let cacheDatabase
 let flushing
+let queueing = 0
 let warning = ''
 let cachedEntry = null
 let memoryOnly = false
 
 function readCache() {
   if (!memoryOnly) {
-    try { cachedEntry = JSON.parse(localStorage.getItem(storageKey)) } catch { memoryOnly = true }
+    try {
+      const entry = JSON.parse(localStorage.getItem(storageKey))
+      if (!entry || (entry.cacheOrder ?? 0) >= (cachedEntry?.cacheOrder ?? 0)) cachedEntry = entry
+    } catch { memoryOnly = true }
   }
   return cachedEntry
 }
@@ -22,6 +28,56 @@ function writeCache(entry) {
   if (!memoryOnly) {
     try { localStorage.setItem(storageKey, JSON.stringify(entry)) } catch { memoryOnly = true }
   }
+}
+
+function openCacheDatabase() {
+  if (!globalThis.indexedDB) return null
+  return new Promise(resolve => {
+    const request = indexedDB.open(storageKey, 1)
+    request.onupgradeneeded = () => request.result.createObjectStore('workspace')
+    request.onerror = () => resolve(null)
+    request.onblocked = () => resolve(null)
+    request.onsuccess = () => {
+      const database = request.result
+      database.onversionchange = () => { database.close(); cacheDatabase = undefined }
+      resolve(database)
+    }
+  }).catch(() => null)
+}
+
+async function changeCache(action) {
+  const database = await (cacheDatabase ??= openCacheDatabase())
+  if (!database) {
+    const apply = async () => action(readCache(), writeCache)
+    return navigator.locks ? navigator.locks.request(`${storageKey}:cache`, apply) : apply()
+  }
+  // localStorage can still expose an older value after a Web Lock passes to another renderer.
+  // Use one transaction for the shared queue; keep localStorage as the recovery copy.
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction('workspace', 'readwrite')
+    const store = transaction.objectStore('workspace')
+    const request = store.get(storageKey)
+    let result
+    let committed
+    transaction.onabort = () => reject(transaction.error ?? new Error(unavailableMessage))
+    transaction.oncomplete = () => {
+      if (committed?.cacheOrder > (readCache()?.cacheOrder ?? 0)) writeCache(committed)
+      resolve(result)
+    }
+    request.onsuccess = () => {
+      try {
+        const previous = request.result ?? readCache()
+        committed = previous
+        result = action(previous, entry => {
+          committed = { ...entry, cacheOrder: (previous?.cacheOrder ?? 0) + 1 }
+          store.put(committed, storageKey)
+        })
+      } catch (error) {
+        transaction.abort()
+        reject(error)
+      }
+    }
+  })
 }
 
 function readLegacyWorkspace() {
@@ -36,7 +92,7 @@ async function requestWorkspace(entry) {
   const signal = AbortSignal.timeout(8000)
   const response = await fetch('/api/workspace', entry ? {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ revision: entry.revision, snapshot: entry.snapshot }), signal,
+    body: JSON.stringify({ revision: entry.revision, snapshot: entry.snapshot, attempt: entry.attempt }), signal,
   } : { signal })
   if (!response.ok && response.status !== 409) throw new Error(unavailableMessage)
   return response.json()
@@ -44,18 +100,26 @@ async function requestWorkspace(entry) {
 
 async function loadCache() {
   try {
+    const startingRevision = (await changeCache(entry => entry))?.revision
     const remote = await requestWorkspace()
-    const local = readCache()
-    const needsSave = local?.pending && local.snapshot !== remote.snapshot
-    if (needsSave) {
-      if (remote.revision === null) writeCache({ ...local, revision: null })
-    } else if (remote.snapshot !== null) {
-      writeCache({ revision: remote.revision, snapshot: remote.snapshot, pending: false })
-    } else {
-      const legacy = local?.revision != null ? local.snapshot : readLegacyWorkspace()
-      const snapshot = JSON.stringify(readWorkspace(legacy ?? local?.snapshot ?? null))
-      writeCache({ revision: null, snapshot, pending: legacy !== null })
-    }
+    await changeCache((local, update) => {
+      // An existing tab can finish a save while this tab waits for its first GET.
+      const superseded = local?.revision != null && local.revision !== startingRevision &&
+        (remote.revision === null || remote.revision < local.revision)
+      if (superseded) return
+      const needsSave = local?.pending && local.snapshot !== remote.snapshot
+      if (needsSave) {
+        if (remote.revision === null && local.revision !== null) {
+          update({ revision: null, snapshot: local.snapshot, pending: true })
+        }
+      } else if (remote.snapshot !== null) {
+        update({ revision: remote.revision, snapshot: remote.snapshot, pending: false })
+      } else {
+        const legacy = local?.revision != null ? local.snapshot : readLegacyWorkspace()
+        const snapshot = JSON.stringify(readWorkspace(legacy ?? local?.snapshot ?? null))
+        update({ revision: null, snapshot, pending: legacy !== null })
+      }
+    })
     warning = ''
   } catch {
     warning = '서버 작업공간을 열지 못했어요. 현재 브라우저에 남아 있는 작품을 표시해요.'
@@ -71,20 +135,40 @@ export function readCachedWorkspace() {
   return readCache()?.snapshot ?? readLegacyWorkspace()
 }
 
-export function cacheWorkspace(snapshot) {
-  const previous = readCache()
-  if (previous?.snapshot !== snapshot) writeCache({ revision: previous?.revision ?? null, snapshot, pending: true })
-  return flushWorkspace()
+export async function cacheWorkspace(prepare) {
+  queueing++
+  try {
+    await changeCache((previous, update) => {
+      const snapshot = prepare(previous?.snapshot ?? readLegacyWorkspace())
+      if (previous?.snapshot !== snapshot) {
+        update({ revision: previous?.revision ?? null, snapshot, pending: true, attempt: previous?.attempt ?? crypto.randomUUID() })
+      }
+    })
+    return { saved: flushWorkspace() }
+  } finally {
+    queueing--
+  }
+}
+
+function pendingSave(entry, update) {
+  if (!entry?.pending) return
+  if (entry.attempt) return entry
+  const sent = { ...entry, attempt: crypto.randomUUID() }
+  update(sent)
+  return sent
 }
 
 async function flushCache() {
   let sent
-  while ((sent = readCache())?.pending) {
+  while ((sent = await changeCache(pendingSave))) {
     const saved = await requestWorkspace(sent)
-    const latest = readCache()
-    if (!latest || latest.revision !== sent.revision) continue
-    if (saved.conflict && saved.snapshot !== sent.snapshot) throw new Error(conflictMessage)
-    writeCache({ revision: saved.revision, snapshot: latest.snapshot, pending: latest.snapshot !== sent.snapshot })
+    await changeCache((latest, update) => {
+      if (!latest || latest.revision !== sent.revision || latest.attempt !== sent.attempt) return
+      if (saved.conflict && saved.snapshot !== sent.snapshot && !saved.committedAttempt) throw new Error(conflictMessage)
+      // A lost response may leave an earlier snapshot from the same attempt on disk.
+      const committed = saved.conflict ? saved.snapshot : sent.snapshot
+      update({ revision: saved.revision, snapshot: latest.snapshot, pending: latest.snapshot !== committed })
+    })
   }
 }
 
@@ -124,7 +208,7 @@ window.addEventListener('storage', event => {
 })
 window.addEventListener('beforeunload', event => {
   try {
-    if (readCache()?.pending) {
+    if (queueing || readCache()?.pending) {
       event.preventDefault()
       event.returnValue = true
     }
