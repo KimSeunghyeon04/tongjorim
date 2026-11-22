@@ -21,6 +21,7 @@ const get = id => document.getElementById(id)
 
 const projectSelect = get('project-select')
 const manuscript = get('manuscript')
+const manuscriptInner = manuscript.closest('.manuscript-inner')
 const manuscriptLines = get('manuscript-lines')
 const revisionLine = get('revision-line')
 const projectTitle = get('project-title')
@@ -209,7 +210,6 @@ function renderProjectSelect() {
   projectSelect.replaceChildren(...workspace.projects.map(project => new Option(projectName(project), project.id)))
   projectSelect.value = currentProject().id
   get('active-project-name').textContent = projectName(currentProject())
-  get('continuation-project-name').textContent = currentContinuation()?.scene?.title ?? get('active-project-name').textContent
 }
 
 function renderLegacySceneNotes(notes = []) {
@@ -286,7 +286,7 @@ function renderManuscriptLines() {
   })
   while (manuscriptLines.children.length > lines.length) manuscriptLines.lastElementChild.remove()
   manuscriptLines.append(pending)
-  manuscriptLines.parentElement.parentElement.style.setProperty('--line-number-digits', String(lines.length).length)
+  manuscriptInner.style.setProperty('--line-number-digits', String(lines.length).length)
   revisionLine.max = lines.length
   revisionLine.setCustomValidity('')
   syncManuscriptGutter()
@@ -811,10 +811,13 @@ async function continueManuscript() {
 function renderContinuation() {
   const draft = currentContinuation()
   const editing = Boolean(draft && !draft.showManuscript)
-  get('manuscript-toolbar').hidden = editing
   get('manuscript-paper').hidden = editing
   get('manuscript-composer').hidden = Boolean(draft)
   get('continuation-paper').hidden = !editing
+  get('continuation-composer').hidden = !editing
+  get('open-revision').hidden = editing
+  continuationDiscard.hidden = !draft
+  if (draft) continuationDiscard.textContent = draft.scene ? '수정 취소' : '초안 버리기'
   get('return-to-continuation').hidden = !draft?.showManuscript
   const historyTab = get('continuation-tab')
   historyTab.hidden = !editing || activeWorkspaceTab !== manuscriptTab
@@ -826,7 +829,9 @@ function renderContinuation() {
 
   const { versions, selected } = draft
   const version = versions[selected]
-  get('continuation-project-name').textContent = draft.scene?.title ?? projectName(currentProject())
+  const label = get('continuation-label')
+  label.textContent = draft.scene?.title ?? '이어쓰기 초안'
+  label.title = draft.scene?.title ?? ''
   const position = draft.scene ? `${manuscriptLineRange(draft.scene.range)} · ` : ''
   get('continuation-version').textContent =
     `${position}버전 ${selected + 1} · ${selected === draft.currentVersion ? '현재 원고' : '미반영'}`

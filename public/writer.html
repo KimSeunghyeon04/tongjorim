@@ -55,12 +55,13 @@
       </div>
       <div class="manuscript-view" id="manuscript-view" role="tabpanel" aria-labelledby="manuscript-tab">
         <div class="manuscript-inner">
-          <div class="manuscript-toolbar" id="manuscript-toolbar">
+          <div class="manuscript-toolbar">
             <h1 id="active-project-name"></h1>
             <div class="manuscript-toolbar-actions">
               <span id="save-status" class="save-status" role="status"></span>
               <button type="button" class="quiet-button" id="return-to-continuation" hidden>초안 보기</button>
               <button type="button" class="quiet-button" id="open-revision">문단 퇴고</button>
+              <button type="button" class="quiet-button" id="continuation-discard" hidden>초안 버리기</button>
             </div>
           </div>
           <div class="paper" id="manuscript-paper">
@@ -70,33 +71,21 @@
               <textarea id="manuscript" class="manuscript" placeholder="첫 문장을 쓰거나, 이어쓰기 지시로 소설을 시작하세요." spellcheck="false"></textarea>
             </div>
           </div>
-          <section class="paper continuation-paper" id="continuation-paper" aria-labelledby="continuation-project-name" hidden>
-            <div class="continuation-version-bar">
-              <h1 id="continuation-project-name"></h1>
+          <section class="paper" id="continuation-paper" aria-labelledby="continuation-label" hidden>
+            <div class="paper-label">
+              <span class="continuation-label" id="continuation-label"></span>
               <div class="continuation-version-actions">
-                <span id="continuation-version" class="field-hint" role="status"></span>
+                <span id="continuation-version" role="status"></span>
                 <button type="button" class="quiet-button" id="continuation-previous" hidden>이전 초안 보기</button>
               </div>
             </div>
-            <div class="continuation-scroll" id="continuation-scroll" tabindex="0" role="region" aria-label="앞뒤 원고와 초안">
-              <p class="continuation-original" id="continuation-original"></p>
-              <p id="continuation-text"></p>
-              <p class="continuation-following" id="continuation-following" hidden></p>
+            <div class="manuscript-editor">
+              <div class="continuation-scroll" id="continuation-scroll" tabindex="0" role="region" aria-label="앞뒤 원고와 초안">
+                <p class="continuation-original" id="continuation-original"></p>
+                <p id="continuation-text"></p>
+                <p class="continuation-following" id="continuation-following" hidden></p>
+              </div>
             </div>
-            <form class="continuation-composer" id="continuation-composer" aria-label="초안 수정">
-              <div class="continuation-input">
-                <label for="continuation-direction">수정 지시</label>
-                <input class="writing-field" id="continuation-direction" type="text" required
-                  placeholder="바꾸고 싶은 묘사나 전개를 적어 주세요." autocomplete="off">
-                <button class="outline-button" id="continuation-rewrite" type="submit">다시 써줘</button>
-                <button class="outline-button" id="continuation-stop" type="button" hidden>수정 중지</button>
-              </div>
-              <p class="field-hint" id="continuation-status" role="status"></p>
-              <div class="continuation-actions">
-                <button class="quiet-button" id="continuation-discard" type="button">초안 버리기</button>
-                <button class="writing-primary" id="continuation-accept" type="button">원고 끝에 붙이기</button>
-              </div>
-            </form>
           </section>
         </div>
         <form class="manuscript-composer" id="manuscript-composer" aria-label="이어쓰기">
@@ -130,6 +119,21 @@
             <p class="field-hint" id="writing-status" role="status"></p>
           </div>
           <p class="field-hint" id="writing-context-limit" role="status" hidden></p>
+        </form>
+        <form class="manuscript-composer" id="continuation-composer" aria-label="초안 수정" hidden>
+          <div class="writing-input">
+            <label for="continuation-direction">수정 지시</label>
+            <input class="writing-field" id="continuation-direction" type="text" required
+              placeholder="바꾸고 싶은 묘사나 전개를 적어 주세요." autocomplete="off">
+          </div>
+          <div class="manuscript-composer-actions continuation-actions">
+            <p class="field-hint" id="continuation-status" role="status"></p>
+            <div class="compact-actions">
+              <button class="outline-button" id="continuation-rewrite" type="submit">다시 써줘</button>
+              <button class="outline-button" id="continuation-stop" type="button" hidden>수정 중지</button>
+              <button class="writing-primary" id="continuation-accept" type="button">원고 끝에 붙이기</button>
+            </div>
+          </div>
         </form>
       </div>
       <section class="note-workspace" id="note-planner" role="tabpanel" aria-labelledby="note-workspace-tab" hidden>
