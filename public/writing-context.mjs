@@ -2,7 +2,7 @@ import { memoryForPrompt } from './manuscript-memory.mjs'
 import { completionEstimate } from './request-tools.mjs'
 import { activeLore, selectPast } from './retrieval.mjs'
 import {
-  completionPayload, defaultSystemPrompt, effectiveSystemPrompt, orderedWritingContext,
+  continuationPayload, orderedWritingContext, sceneNeighborLimit,
   writingFieldPrefix,
 } from './writing-config.mjs'
 
@@ -14,11 +14,33 @@ function suffixAt(text, length) {
   return text.slice(start)
 }
 
-export function planWritingContext(project, references, model, limits, addedLoreCards) {
+function fitSuffix(text, fits) {
+  if (fits(text)) return text
+  let low = 0
+  let high = text.length
+  while (low < high) {
+    const length = Math.ceil((low + high) / 2)
+    if (fits(suffixAt(text, length))) low = length
+    else high = length - 1
+  }
+  return suffixAt(text, low)
+}
+
+const contextReserve = length => length === null ? 0 : Math.min(2048, Math.max(128, Math.ceil(length * 0.05)))
+
+export function planWritingContext(project, references, model, limits, addedLoreCards, sceneRevision) {
   const { manuscript, maxTokens, systemPrompt } = project
   const direction = writingFieldPrefix('direction', project.direction)
   const sceneLength = writingFieldPrefix('sceneLength', (project.sceneLength ?? '').trim())
-  const lore = references.includes('lorebook') ? activeLore(project.lorebook ?? [], manuscript, direction, addedLoreCards)
+  const recentLimit = references.includes('manuscript') ? limits.manuscript : 0
+  const revision = sceneRevision && { text: sceneRevision.text, direction: sceneRevision.direction }
+  if (revision && recentLimit && sceneRevision.following) {
+    const afterLimit = Math.max(Math.floor(recentLimit / 2), recentLimit - manuscript.length)
+    const following = sceneRevision.following.slice(0, Math.min(afterLimit, sceneNeighborLimit)).toWellFormed()
+    if (following) revision.following = following
+  }
+  const lore = references.includes('lorebook')
+    ? activeLore(project.lorebook ?? [], manuscript, direction, addedLoreCards, revision)
     : { text: '', candidates: [] }
   const draft = orderedWritingContext({
     projectTitle: writingFieldPrefix('projectTitle', project.title), synopsis: project.synopsis ?? '',
@@ -26,33 +48,23 @@ export function planWritingContext(project, references, model, limits, addedLore
     lorebook: lore.text, manuscript: '', pastPassages: '',
   }, references)
   const contextLength = model?.contextLength ?? null
-  const reserve = contextLength === null ? 0 : Math.min(2048, Math.max(128, Math.ceil(contextLength * 0.05)))
-  const prompt = effectiveSystemPrompt(systemPrompt, defaultSystemPrompt)
-  const estimate = context => completionEstimate(completionPayload(project.model, maxTokens, prompt, context), model)
-  const base = estimate(draft)
-  const budget = contextLength === null ? null : contextLength - base.outputTokens - reserve
+  const reserve = contextReserve(contextLength)
+  const estimate = context => completionEstimate(continuationPayload(project.model, maxTokens, systemPrompt, context, revision), model)
+  const budget = contextLength === null ? null : contextLength - maxTokens - reserve
   const fits = context => budget === null || estimate(context).inputTokens <= budget
+  if (revision?.following && !fits(draft)) delete revision.following
+  const base = estimate(draft)
   let recentReduced = false
   if (references.includes('manuscript')) {
-    const requested = Math.min(manuscript.length, limits.manuscript)
+    const requested = Math.min(manuscript.length, recentLimit - (revision?.following?.length ?? 0))
     const full = suffixAt(manuscript, requested)
-    draft.manuscript = full
-    if (!fits(draft)) {
-      let low = 0
-      let high = requested
-      while (low < high) {
-        const length = Math.ceil((low + high) / 2)
-        if (fits({ ...draft, manuscript: suffixAt(manuscript, length) })) low = length
-        else high = length - 1
-      }
-      draft.manuscript = suffixAt(manuscript, low)
-      recentReduced = draft.manuscript.length < full.length
-    }
+    draft.manuscript = fitSuffix(full, manuscript => fits({ ...draft, manuscript }))
+    recentReduced = draft.manuscript.length < full.length
   }
   const cutoff = manuscript.length - (draft.manuscript?.length ?? 0)
   const pastLimit = references.includes('pastPassages') ? limits.pastPassages : 0
   const canFitPast = pastLimit > 0 && (budget === null || estimate(draft).inputTokens < budget)
-  const body = { model: project.model, maxTokens, systemPrompt, references, draft }
+  const body = { model: project.model, maxTokens, systemPrompt, references, draft, ...(revision ? { sceneRevision: revision } : {}) }
   return {
     cutoff, pastLimit, canFitPast, body,
     finish(ranked = []) {

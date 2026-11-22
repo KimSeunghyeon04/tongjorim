@@ -3,13 +3,14 @@ import { withModelOptions } from './model-options.mjs'
 import {
   appendParagraphs, completionPayload, defaultLoreSystemPrompt, defaultMemoryPrompt, defaultNoteSystemPrompt, defaultRevisionPrompt, defaultSystemPrompt,
   effectiveSystemPrompt, memoryOutputLimit, modelFor, normalizeLineEndings, noteDraftActions, noteKinds,
-  systemPromptLimit, writingFieldPrefix, writingFields,
+  sceneDraftLimit, systemPromptLimit, writingFieldPrefix, writingFields,
 } from './writing-config.mjs'
 import { assistantMessageLimit, assistantNoteDraftLimit, assistantProjectContext, createWritingAssistant, projectNotesLimitHint } from './writing-assistant.mjs'
 import { memoryForPrompt, memoryReadThrough, memoryRequest, setManuscriptText, updateManuscriptMemory } from './manuscript-memory.mjs'
-import { exportPack, exportProject, readPack, readProject } from './project-files.mjs'
-import { currentProjectOf, makeProject, mergeModelSettings, projectName, readWorkspace } from './writing-workspace.mjs'
-import { cacheWorkspace, openWorkspaceStorage, readCachedWorkspace, storageConflictMessage, storageKey, workspaceStatusEvent, workspaceStorageStatus } from './workspace-storage.mjs'
+import { forgetSceneUndo, isSceneHistoryEdit, manuscriptEdit, reconcileSceneUndo, rememberUndoneComposition, sceneHistoryReplay, sceneRange, sceneRangeAvailable, sceneTitle, sceneVersions } from './manuscript-scenes.mjs'
+import { exportPack, exportProject, readPack, readProject, referenceSettingsFor } from './project-files.mjs'
+import { currentProjectOf, makeProject, mergeModelSettings, projectName, readWorkspace, workspaceMatchesSnapshot } from './writing-workspace.mjs'
+import { cacheWorkspace, openWorkspaceStorage, readCachedWorkspace, readLatestWorkspace, storageConflictMessage, storageKey, workspaceChangeEvent, workspaceStatusEvent, workspaceStorageStatus } from './workspace-storage.mjs'
 import { setupResearch } from './research-panel.mjs'
 import { setupLorebook } from './lorebook-panel.mjs'
 import { setupSourcePanel } from './source-panel.mjs'
@@ -35,6 +36,18 @@ const projectNoteSections = [...projectNoteContent.querySelectorAll('[data-proje
 const generate = get('generate')
 const stopWriting = get('stop-writing')
 const writingStatus = get('writing-status')
+const continuationHistory = get('continuation-history')
+const continuationDirection = get('continuation-direction')
+const continuationPrevious = get('continuation-previous')
+const continuationRewrite = get('continuation-rewrite')
+const continuationStop = get('continuation-stop')
+const continuationAccept = get('continuation-accept')
+const continuationDiscard = get('continuation-discard')
+const scenesPanel = get('scenes-panel')
+const savedSceneList = get('saved-scene-list')
+const sceneRewrite = get('saved-scene-rewrite')
+const sceneRegister = get('scene-register')
+const sceneConfirmRange = get('scene-confirm-range')
 const revisionProposal = {
   section: get('revision-proposal'),
   title: get('revision-proposal-title'),
@@ -74,16 +87,26 @@ const memoryStatus = get('memory-status')
 const memoryText = get('memory-text')
 const formatNumber = new Intl.NumberFormat('ko-KR')
 let revisionDraft
+const continuations = new Map()
+const writingContextChanged = '원고나 참고 설정이 바뀌었어요. 현재 설정에서 다시 요청해 주세요.'
+const selectedScenes = new WeakMap()
+const sceneMessages = new WeakMap()
+const sceneUndo = []
+let manuscriptSelectionBeforeEdit
+let manuscriptComposition
+const composingManuscript = () => manuscriptComposition && manuscript.value !== manuscriptComposition.project.manuscript
 const plans = new WeakMap()
 const memoryJobs = new WeakMap()
 let models = [freeModel]
 let activeRequest
+const manuscriptCommitPending = () => ['continuation-save', 'scene-registration'].includes(activeRequest?.kind)
 let activePreview
 let previewOrigin
 const addedLoreCards = new WeakMap()
 let revisionSelection
 let indexedManuscript
 let manuscriptLineStarts = [0]
+let pendingContinuationStart
 let savedVersion
 let storageReadable = true
 let storageWarning = ''
@@ -104,6 +127,7 @@ await openWorkspaceStorage()
 const workspace = loadWorkspace()
 const openedSnapshot = storageReadable && savedVersion != null ? savedVersion : JSON.stringify(workspace)
 const currentProject = () => currentProjectOf(workspace)
+const currentContinuation = () => continuations.get(currentProject())
 const planAssistant = createWritingAssistant({
   transcript: planTranscript,
   scrollport: get('plan-conversation'),
@@ -123,6 +147,7 @@ const planAssistant = createWritingAssistant({
 })
 
 function showStorageStatus() {
+  activeRequest?.cancelPreparation?.()
   const status = workspaceStorageStatus()
   const warning = storageWarning || status.warning
   get('storage-error').hidden = !warning
@@ -133,19 +158,23 @@ function showStorageStatus() {
   if (get('save-status').textContent !== label) get('save-status').textContent = label
 }
 
+const hasUnsavedWorkspace = () => !workspaceMatchesSnapshot(workspace, storageReadable ? savedVersion ?? openedSnapshot : openedSnapshot)
+
 function syncSavedWorkspace(latest) {
-  if (latest === savedVersion) return true
   if (!storageReadable) return false
   let changed
-  try {
-    changed = mergeModelSettings(workspace, savedVersion, latest)
-  } catch {
-    return false
+  if (latest !== savedVersion) {
+    try {
+      changed = mergeModelSettings(workspace, savedVersion, latest)
+    } catch {
+      return false
+    }
+    if (!changed) return false
+    savedVersion = latest
   }
-  if (!changed) return false
-  savedVersion = latest
-  storageWarning = ''
-  if (changed.has(currentProject().id)) writingInputsChanged()
+  // A recovered snapshot does not recover an edit that was rejected in this tab.
+  if (storageWarning === storageConflictMessage && !hasUnsavedWorkspace()) storageWarning = ''
+  if (changed?.has(currentProject().id)) writingInputsChanged()
   return true
 }
 
@@ -180,6 +209,7 @@ function renderProjectSelect() {
   projectSelect.replaceChildren(...workspace.projects.map(project => new Option(projectName(project), project.id)))
   projectSelect.value = currentProject().id
   get('active-project-name').textContent = projectName(currentProject())
+  get('continuation-project-name').textContent = currentContinuation()?.scene?.title ?? get('active-project-name').textContent
 }
 
 function renderLegacySceneNotes(notes = []) {
@@ -200,6 +230,9 @@ function renderLegacySceneNotes(notes = []) {
 }
 
 function switchPanel(name = manuscriptPanel) {
+  if (name === 'continuation' && get('continuation-tab').hidden) {
+    name = currentContinuation()?.previousPanel ?? 'tools'
+  }
   if (notePlanner.hidden) manuscriptPanel = name
   const panel = notePlanner.hidden ? manuscriptPanel : 'notes'
   for (const button of toolButtons) {
@@ -208,6 +241,7 @@ function switchPanel(name = manuscriptPanel) {
     get(button.getAttribute('aria-controls')).hidden = !selected
   }
   writingTools.scrollTop = 0
+  syncSceneControls()
 }
 
 function selectProjectNote(key) {
@@ -269,6 +303,32 @@ function manuscriptLineAt(offset) {
   return first
 }
 
+function setManuscriptScrollPadding(above = 0, below = 0) {
+  manuscript.style.paddingBlock = `${above}px ${below}px`
+  manuscriptLines.style.paddingBlockStart = `${above}px`
+}
+
+function showContinuationStart() {
+  if (pendingContinuationStart === undefined || !manuscript.clientHeight) return
+  const line = manuscriptLines.children[manuscriptLineAt(pendingContinuationStart) - 1]
+  pendingContinuationStart = undefined
+  setManuscriptScrollPadding()
+  syncManuscriptGutter()
+
+  const center = manuscript.clientHeight / 2
+  const halfLineHeight = parseFloat(getComputedStyle(manuscript).lineHeight) / 2
+  const start = line.offsetTop + halfLineHeight
+  setManuscriptScrollPadding(
+    Math.max(0, Math.ceil(center - start)),
+    Math.max(0, Math.ceil(center - (manuscriptLines.offsetHeight - start))),
+  )
+
+  // Adding scroll space can introduce a scrollbar and change line wrapping.
+  syncManuscriptGutter()
+  manuscript.scrollTop = line.offsetTop + halfLineHeight - center
+  syncManuscriptGutter()
+}
+
 function manuscriptLineRange({ start, end }) {
   const first = manuscriptLineAt(start)
   const last = manuscriptLineAt(Math.max(start, end - 1))
@@ -278,10 +338,133 @@ function manuscriptLineRange({ start, end }) {
 
 const passagePosition = range => `원고 ${manuscriptLineRange(range)}`
 
+function selectedScene(project = currentProject()) {
+  return project.savedScenes?.find(scene => scene.id === selectedScenes.get(project))
+}
+
+function selectedManuscriptRange(project) {
+  if (get('manuscript-paper').hidden || activeWorkspaceTab !== manuscriptTab || composingManuscript()) return null
+  return sceneRange(project.manuscript, manuscript.selectionStart, manuscript.selectionEnd)
+}
+
+function renderSavedScenes() {
+  const project = currentProject()
+  const selected = selectedScenes.get(project)
+  const scenes = [...(project.savedScenes ?? [])].sort((a, b) => (a.range?.start ?? Infinity) - (b.range?.start ?? Infinity))
+  savedSceneList.replaceChildren(...scenes.map(scene => {
+    const item = document.createElement('li')
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = 'outline-button saved-scene-choice'
+    button.dataset.scene = scene.id
+    button.setAttribute('aria-pressed', String(scene.id === selected))
+    const title = document.createElement('strong')
+    title.textContent = scene.title
+    const position = document.createElement('span')
+    position.className = 'field-hint'
+    position.textContent = scene.range ? manuscriptLineRange(scene.range) : '위치 확인 필요'
+    button.append(title, position)
+    item.append(button)
+    return item
+  }))
+  syncSceneControls()
+}
+
+function syncSceneControls() {
+  if (scenesPanel.hidden) return
+  for (const button of savedSceneList.querySelectorAll('button')) button.disabled = manuscriptCommitPending()
+  const project = currentProject()
+  const scene = selectedScene(project)
+  const range = selectedManuscriptRange(project)
+  const busy = Boolean(activeRequest || planAssistant.busy || currentContinuation())
+  const canRegister = sceneRangeAvailable(project.savedScenes, range)
+  sceneRewrite.hidden = !scene?.range
+  sceneRewrite.disabled = busy
+  sceneConfirmRange.hidden = !scene || Boolean(scene.range)
+  sceneConfirmRange.disabled = busy || !sceneRangeAvailable(project.savedScenes, range, scene?.id)
+  sceneRegister.hidden = !sceneConfirmRange.hidden
+  sceneRegister.disabled = busy || !canRegister
+  const hint = get('scene-range-hint')
+  const message = sceneMessages.get(project) ?? (busy && currentContinuation()
+    ? '열려 있는 초안 작업을 마치면 장면을 수정하거나 등록할 수 있어요.'
+    : scene && !scene.range ? '원고에서 이 장면의 범위를 다시 선택해 주세요.'
+      : canRegister ? `${manuscriptLineRange(range)} 선택됨`
+        : '원고에서 새 범위를 선택하면 장면으로 등록할 수 있어요.')
+  if (hint.textContent !== message) hint.textContent = message
+  hint.hidden = !message
+}
+
+async function saveSceneRange(scene) {
+  const project = currentProject()
+  const original = project.manuscript
+  const range = selectedManuscriptRange(project)
+  if (activeRequest || planAssistant.busy || currentContinuation() ||
+      !sceneRangeAvailable(project.savedScenes, range, scene?.id)) return
+  const text = original.slice(range.start, range.end)
+  const savedScene = scene ? { ...scene, range } : {
+    id: crypto.randomUUID(), title: sceneTitle(text), range, accepted: 0,
+    versions: [{ text, direction: '', parent: null, source: 'registered' }],
+  }
+  activeRequest = { kind: 'scene-registration' }
+  syncControls()
+  const saved = await saveWorkspace(() => {
+    if (project !== currentProject() || project.manuscript !== original) throw new Error('원고의 선택 범위가 바뀌었어요.')
+    const previous = project.savedScenes
+    if (scene && !previous.some(item => item.id === scene.id && !item.range)) throw new Error('장면 위치가 바뀌었어요.')
+    const updated = scene ? previous.map(item => item.id === scene.id ? savedScene : item) : [...(previous ?? []), savedScene]
+    project.savedScenes = updated
+    return () => {
+      if (project.savedScenes !== updated) return
+      if (previous) project.savedScenes = previous
+      else delete project.savedScenes
+    }
+  })
+  activeRequest = undefined
+  if (saved) {
+    selectedScenes.set(project, savedScene.id)
+    forgetSceneUndo(sceneUndo, savedScene.id)
+  }
+  sceneMessages.set(project, saved ? (scene ? '장면 위치를 확인했어요.' : '선택 범위를 장면으로 등록했어요.')
+    : '장면을 저장하지 못했어요. 저장 상태를 확인해 주세요.')
+  renderSavedScenes()
+  syncControls()
+  if (saved && !scenesPanel.hidden) sceneRewrite.focus({ preventScroll: true })
+}
+
+function openSavedScene() {
+  const project = currentProject()
+  const scene = selectedScene(project)
+  if (sceneRewrite.disabled || !scene?.range) return
+  const original = project.manuscript
+  const { start, end } = scene.range
+  const before = original.slice(0, start)
+  const after = original.slice(end)
+  const text = original.slice(start, end)
+  const versions = [...scene.versions]
+  let selected = scene.accepted
+  if (versions[selected].text !== text) {
+    versions.push({ text, direction: '', parent: selected, source: 'manual' })
+    selected = versions.length - 1
+  }
+  continuations.set(project, {
+    original, tail: paragraphRanges(before).at(-1)?.text ?? '', following: paragraphRanges(after)[0]?.text ?? '',
+    scene, previousPanel: 'scenes', versions, selected, currentVersion: selected, direction: '', feedback: '',
+  })
+  renderContinuation()
+  switchPanel('continuation')
+  syncControls()
+  continuationDirection.focus({ preventScroll: true })
+}
+
 function renderWorkspace() {
   const project = currentProject()
   closeRequestPreview()
   revisionSelection = undefined
+  manuscriptSelectionBeforeEdit = undefined
+  manuscriptComposition = undefined
+  sceneUndo.length = 0
+  pendingContinuationStart = undefined
+  setManuscriptScrollPadding()
   revisionLine.value = ''
   revisionLine.setCustomValidity('')
   get('revision-direction').value = ''
@@ -301,6 +484,11 @@ function renderWorkspace() {
   lorebook.render()
   research.render()
   renderEstimates()
+  renderSavedScenes()
+  renderContinuation()
+  if (currentContinuation() && activeWorkspaceTab === manuscriptTab && !currentContinuation().showManuscript) {
+    switchPanel('continuation')
+  }
   syncControls()
 }
 
@@ -314,10 +502,13 @@ function syncControls() {
   }
   get('lore-preview-fields').disabled = busy || Boolean(activePreview)
   get('lore-quick-list').disabled = busy || Boolean(activePreview)
-  const writing = Boolean(activeRequest && !activeRequest.revision)
+  const writing = activeRequest?.kind === 'continuation'
+  manuscript.readOnly = manuscriptCommitPending()
   generate.hidden = writing
   stopWriting.hidden = !writing
-  get('generate-revision').disabled = busy || !selectedRevision()
+  get('generate-revision').disabled = busy || !get('continuation-paper').hidden || !selectedRevision()
+  syncContinuationControls(busy)
+  syncSceneControls()
   updatePlanControls()
 }
 
@@ -328,7 +519,7 @@ function renderRevisionProposal(preview) {
   view.usage.textContent = preview.usage ? usageLabel(preview.usage) : ''
   if (view.body.textContent !== preview.text) view.body.textContent = preview.text
   const changed = currentProject().manuscript !== preview.original
-  const pending = Boolean(activeRequest?.revision)
+  const pending = activeRequest?.kind === 'paragraph-revision'
   const status = changed ? '생성 요청 후 원고가 바뀌었어요. 다시 요청해 주세요.' : preview.status
   if (view.status.textContent !== status) view.status.textContent = status
   view.accept.disabled = pending || changed || !preview.text.trim() || !preview.complete
@@ -336,7 +527,7 @@ function renderRevisionProposal(preview) {
 }
 
 function closeRevisionProposal() {
-  if (activeRequest?.revision) activeRequest.controller.abort()
+  if (activeRequest?.kind === 'paragraph-revision') activeRequest.controller.abort()
   revisionDraft = undefined
   revisionProposal.section.close()
   manuscript.focus()
@@ -436,6 +627,7 @@ function closeRequestPreview() {
 }
 
 function writingInputsChanged() {
+  activeRequest?.cancelPreparation?.()
   closeRequestPreview()
   lorebook.renderContext()
   research.renderState()
@@ -444,7 +636,13 @@ function writingInputsChanged() {
 }
 
 function goToPassage({ start, end, text }) {
-  if (manuscript.value.slice(start, end) !== text) return
+  if (manuscriptCommitPending() || manuscript.value.slice(start, end) !== text) return
+  const draft = currentContinuation()
+  if (draft && !draft.showManuscript) {
+    draft.showManuscript = true
+    renderContinuation()
+    syncControls()
+  }
   setWorkspaceTab(manuscriptTab)
   manuscript.focus()
   manuscript.setSelectionRange(start, end)
@@ -459,6 +657,10 @@ function goToPassage({ start, end, text }) {
 
 const research = setupResearch({
   get, currentProject, saveWorkspace, goToPassage, passagePosition,
+  async assertWorkspaceCurrent(project) {
+    await verifyWorkspaceForRequest()
+    if (!workspace.projects.some(item => item.id === project.id)) throw new DOMException(writingContextChanged, 'AbortError')
+  },
   onChange() {
     writingInputsChanged()
     lorebook.renderQuick()
@@ -545,21 +747,28 @@ async function showRequestPreview({ refreshSemantic = false, origin, loreFocus }
 }
 
 async function continueManuscript() {
-  if (activeRequest || planAssistant.busy) return
+  if (activeRequest || planAssistant.busy || currentContinuation()) return
   const project = currentProject()
   const original = project.manuscript
-  const oneTimeNote = project.authorMode === 'once' ? project.direction : undefined
   const controller = new AbortController()
   const { signal } = controller
   const focusedGenerate = document.activeElement === generate
-  activeRequest = { controller, revision: false }
+  const request = { controller, kind: 'continuation' }
+  activeRequest = request
   syncControls()
   if (focusedGenerate) stopWriting.focus({ preventScroll: true })
   writingStatus.textContent = '전송할 원고와 자료를 준비하는 중이에요.'
 
   try {
-    const { body, remaining } = await research.prepare(project, catalogModel(project.model), signal)
+    await verifyWorkspaceForRequest()
+    const assertCurrent = watchWritingPreparation(request, project, original, original.length, { useCurrentNote: true })
+    assertCurrent()
+    const oneTimeNote = project.authorMode === 'once' ? project.direction : undefined
+    const { body, remaining } = await research.prepare(project, catalogModel(project.model), signal, { assertCurrent })
+    await verifyWorkspaceForRequest()
+    assertCurrent()
     if (remaining < 0) throw new Error('모델 컨텍스트가 부족해요. 프롬프트, 참고 자료나 출력 한도를 줄여 주세요.')
+    delete request.cancelPreparation
 
     let output = ''
     const result = await requestCompletion('/api/write', withModelOptions(project, body), {
@@ -575,28 +784,300 @@ async function continueManuscript() {
     if (currentProject() !== project || project.manuscript !== original) {
       throw new Error('생성 중 원고가 바뀌었어요. 현재 원고에서 다시 요청해 주세요.')
     }
-    if (project.authorMode === 'once' && project.direction === oneTimeNote &&
-        body.draft.direction === writingFieldPrefix('direction', oneTimeNote)) {
-      project.direction = ''
-      get('direction').value = ''
-    }
-    const updated = appendParagraphs(original, text)
+    continuations.set(project, {
+      original, tail: paragraphRanges(original).at(-1)?.text ?? '', sceneLength: body.draft.sceneLength, oneTimeNote,
+      previousPanel: manuscriptPanel, versions: [{ text, direction: body.draft.direction, parent: null, result, truncated: result.truncated }],
+      selected: 0, direction: '', feedback: '',
+    })
     addedLoreCards.delete(project)
     lorebook.renderQuick()
-    saveManuscript(project, updated)
-    manuscript.setSelectionRange(updated.length, updated.length)
-    manuscript.scrollTop = manuscript.scrollHeight
-    if (project.autoMemory) refreshProjectMemory(project)
-    const status = result.truncated ? '토큰 한도까지 생성된 내용을 추가했어요. 끝 문장을 확인해 주세요.' : '원고에 추가했어요.'
-    writingStatus.textContent = result.usage ? `${status} ${usageLabel(result.usage)}` : status
+    writingStatus.textContent = ''
   } catch (error) {
     writingStatus.textContent = completionFailure(error, signal)
   } finally {
     const focusedStop = document.activeElement === stopWriting
     activeRequest = undefined
+    if (currentContinuation()) {
+      renderContinuation()
+      if (activeWorkspaceTab === manuscriptTab) switchPanel('continuation')
+    }
     syncControls()
-    if (focusedStop) generate.focus({ preventScroll: true })
+    if (focusedStop && activeWorkspaceTab === manuscriptTab) {
+      (currentContinuation() ? continuationDirection : generate).focus({ preventScroll: true })
+    }
   }
+}
+
+function renderContinuation() {
+  const draft = currentContinuation()
+  const editing = Boolean(draft && !draft.showManuscript)
+  get('manuscript-toolbar').hidden = editing
+  get('manuscript-paper').hidden = editing
+  get('manuscript-composer').hidden = Boolean(draft)
+  get('continuation-paper').hidden = !editing
+  get('return-to-continuation').hidden = !draft?.showManuscript
+  const historyTab = get('continuation-tab')
+  historyTab.hidden = !editing || activeWorkspaceTab !== manuscriptTab
+  if (historyTab.hidden && manuscriptPanel === 'continuation') switchPanel()
+  if (!editing) {
+    continuationHistory.replaceChildren()
+    return
+  }
+
+  const { versions, selected } = draft
+  const version = versions[selected]
+  get('continuation-project-name').textContent = draft.scene?.title ?? projectName(currentProject())
+  const position = draft.scene ? `${manuscriptLineRange(draft.scene.range)} · ` : ''
+  get('continuation-version').textContent =
+    `${position}버전 ${selected + 1} · ${selected === draft.currentVersion ? '현재 원고' : '미반영'}`
+  continuationAccept.textContent = draft.scene ? '이 장면 교체' : '원고 끝에 붙이기'
+  continuationPrevious.hidden = version.parent === null
+  get('continuation-original').textContent = draft.tail
+  get('continuation-original').hidden = !draft.tail
+  get('continuation-following').textContent = draft.following ?? ''
+  get('continuation-following').hidden = !draft.following
+  get('continuation-text').textContent = version.text
+  continuationDirection.value = draft.direction
+  get('continuation-scroll').scrollTop = 0
+
+  const ancestors = new Set()
+  for (let current = selected; current !== null; current = versions[current].parent) ancestors.add(current)
+  const branched = versions.some(({ parent }, index) => parent !== null && parent !== index - 1)
+  continuationHistory.replaceChildren(...versions.map(({ direction, parent, source }, index) => {
+    const item = document.createElement('li')
+    item.classList.toggle('on-version-path', ancestors.has(index))
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.dataset.version = index
+    if (index === selected) button.setAttribute('aria-current', 'true')
+    const title = document.createElement('strong')
+    const label = source === 'registered' ? '원고에서 등록' : source === 'manual' ? '원고 직접 편집'
+      : parent === null ? '작가의 노트' : '수정 지시'
+    title.textContent = `버전 ${index + 1} · ${label}`
+    button.append(title)
+    for (const [shown, text] of [[index === draft.currentVersion, '현재 원고'], [index === selected, '보는 중']]) {
+      if (!shown) continue
+      const current = document.createElement('span')
+      current.className = 'continuation-current'
+      current.textContent = text
+      button.append(current)
+    }
+    if (branched && parent !== null) {
+      const source = document.createElement('span')
+      source.className = 'continuation-parent'
+      source.textContent = `버전 ${parent + 1}에서 수정`
+      button.append(source)
+    }
+    if (!source) {
+      const instruction = document.createElement('span')
+      instruction.className = 'continuation-instruction'
+      instruction.textContent = direction.trim() || '작가의 노트 없음'
+      button.append(instruction)
+    }
+    item.append(button)
+    return item
+  }))
+}
+
+function syncContinuationControls(busy) {
+  const draft = currentContinuation()
+  if (!draft) return
+  const version = draft.versions[draft.selected]
+  const rewriting = activeRequest?.kind === 'scene-revision'
+  const changed = draft.original !== currentProject().manuscript
+  const tooLong = version.text.length > sceneDraftLimit
+  continuationDirection.readOnly = busy
+  continuationRewrite.hidden = rewriting
+  continuationRewrite.disabled = busy || changed || tooLong || !draft.direction.trim()
+  continuationStop.hidden = !rewriting
+  continuationPrevious.disabled = busy
+  continuationAccept.disabled = busy || changed
+  continuationDiscard.disabled = busy
+  for (const button of continuationHistory.querySelectorAll('button')) button.disabled = busy
+  const status = [
+    changed ? '원고가 바뀌었어요. 현재 원고에서 초안을 다시 열어 주세요.'
+      : draft.feedback || (version.truncated ? '출력 한도에 도달했어요. 끝 문장을 확인해 주세요.' : ''),
+    tooLong ? '이 초안은 수정 요청에 보내기에는 너무 길어요.' : '',
+    !draft.feedback && version.result?.usage ? usageLabel(version.result.usage) : '',
+  ].filter(Boolean).join(' ')
+  const statusField = get('continuation-status')
+  statusField.hidden = !status
+  if (statusField.textContent !== status) statusField.textContent = status
+}
+
+function showContinuationVersion(index) {
+  const draft = currentContinuation()
+  if (!draft || activeRequest || planAssistant.busy || !draft.versions[index] || index === draft.selected) return
+  draft.selected = index
+  draft.feedback = ''
+  renderContinuation()
+  syncControls()
+}
+
+function watchWritingPreparation(request, project, original, start, { useCurrentNote = false } = {}) {
+  const { controller } = request
+  const stale = new DOMException(writingContextChanged, 'AbortError')
+  const inputVersion = () => {
+    const settings = referenceSettingsFor(project)
+    const enabled = new Set(settings.filter(ref => ref.enabled).map(ref => ref.key))
+    return JSON.stringify([
+      settings, project.model, project.maxTokens, project.modelOptions, project.systemPrompt,
+      project.title, project.synopsis, project.sourceLimits,
+      useCurrentNote ? [project.direction, project.sceneLength, project.authorMode] : undefined,
+      enabled.has('pastPassages') ? project.search : undefined,
+      enabled.has('lorebook') ? [project.lorebook, [...(addedLoreCards.get(project) ?? [])]] : undefined,
+      enabled.has('manuscriptMemory') && memoryReadThrough(project) <= start ? project.manuscriptMemory : undefined,
+    ])
+  }
+  const originalSettings = inputVersion()
+  const changed = () => storageWarning === storageConflictMessage || workspaceStorageStatus().conflict ||
+    composingManuscript() || project.manuscript !== original || inputVersion() !== originalSettings
+  request.cancelPreparation = () => {
+    if (changed()) controller.abort(stale)
+  }
+  return () => {
+    request.cancelPreparation()
+    controller.signal.throwIfAborted()
+  }
+}
+
+async function rewriteContinuation() {
+  const project = currentProject()
+  const draft = currentContinuation()
+  if (!draft || continuationRewrite.disabled) return
+  const parent = draft.selected
+  const direction = draft.direction.trim()
+  const controller = new AbortController()
+  const { signal } = controller
+  const start = draft.scene?.range.start ?? draft.original.length
+  const request = { controller, kind: 'scene-revision' }
+  activeRequest = request
+  draft.feedback = '수정에 사용할 자료를 준비하고 있어요.'
+  syncControls()
+  if (activeWorkspaceTab === manuscriptTab) continuationStop.focus({ preventScroll: true })
+  try {
+    await verifyWorkspaceForRequest()
+    const assertCurrent = watchWritingPreparation(request, project, draft.original, start)
+    assertCurrent()
+    const source = {
+      ...project, manuscript: draft.original.slice(0, start), direction: draft.versions[0].direction,
+      sceneLength: draft.sceneLength, references: referenceSettingsFor(project).map(ref => ({ ...ref })),
+      manuscriptMemory: memoryReadThrough(project) <= start ? project.manuscriptMemory : undefined,
+    }
+    const sceneRevision = { text: draft.versions[parent].text, direction, following: draft.following }
+    const { body, remaining } = await research.prepare(
+      project, catalogModel(project.model), signal, { source, sceneRevision, assertCurrent },
+    )
+    await verifyWorkspaceForRequest()
+    assertCurrent()
+    if (remaining < 0) throw new Error('모델 컨텍스트가 부족해요. 출력 한도를 줄이거나 컨텍스트가 더 큰 모델을 선택해 주세요.')
+    delete request.cancelPreparation
+    draft.feedback = '수정안을 작성하고 있어요.'
+    syncControls()
+    let output = ''
+    const result = await requestCompletion('/api/write', withModelOptions(project, body), {
+      signal, projectId: project.id,
+      onText(content) { output += content },
+    })
+    signal.throwIfAborted()
+    const text = normalizeLineEndings(output.trim())
+    if (!text) throw new Error('수정할 초안을 받지 못했어요. 다시 요청해 주세요.')
+    if (project.manuscript !== draft.original) throw new Error('수정 중 원고가 바뀌었어요.')
+    draft.versions.push({ text, direction, parent, result, truncated: result.truncated })
+    draft.selected = draft.versions.length - 1
+    draft.direction = ''
+    draft.feedback = ''
+    renderContinuation()
+  } catch (error) {
+    draft.feedback = completionFailure(error, signal)
+  } finally {
+    const focusedStop = document.activeElement === continuationStop
+    activeRequest = undefined
+    syncControls()
+    if (focusedStop && activeWorkspaceTab === manuscriptTab) continuationDirection.focus({ preventScroll: true })
+  }
+}
+
+function closeContinuation(project) {
+  if (manuscriptPanel === 'continuation') switchPanel(continuations.get(project).previousPanel)
+  continuations.delete(project)
+  renderContinuation()
+  switchPanel()
+  syncControls()
+}
+
+async function acceptContinuation() {
+  const project = currentProject()
+  const draft = currentContinuation()
+  if (!draft || continuationAccept.disabled) return
+  const { scene, original, versions, selected } = draft
+  const { text } = versions[selected]
+  const updated = scene ? original.slice(0, scene.range.start) + text + original.slice(scene.range.end)
+    : appendParagraphs(original, text)
+  const start = scene?.range.start ?? updated.length - text.length
+  const range = { start, end: start + text.length }
+  const savedScene = {
+    id: scene?.id ?? crypto.randomUUID(), title: scene?.title ?? sceneTitle(text),
+    range, accepted: selected, versions: sceneVersions(versions),
+  }
+  activeRequest = { kind: 'continuation-save' }
+  draft.feedback = '원고에 반영하는 중이에요.'
+  syncControls()
+  const saved = await saveWorkspace(() => {
+    const liveRange = scene && project.savedScenes?.find(item => item.id === scene.id)?.range
+    if (project !== currentProject() || project.manuscript !== original ||
+        (scene && (liveRange?.start !== scene.range.start || liveRange?.end !== scene.range.end))) {
+      throw new Error('초안을 만든 뒤 원고가 바뀌었어요.')
+    }
+    const previousNote = project.direction
+    const previousMemory = project.manuscriptMemory
+    const previousScenes = project.savedScenes
+    const clearNote = draft.oneTimeNote !== undefined && project.authorMode === 'once' &&
+      previousNote === draft.oneTimeNote && draft.versions[0].direction === writingFieldPrefix('direction', previousNote)
+    const edit = scene ? { ...scene.range, inserted: text }
+      : { start: original.length, end: original.length, inserted: updated.slice(original.length) }
+    setManuscriptText(project, updated, edit)
+    const updatedMemory = project.manuscriptMemory
+    const moved = project.savedScenes ?? []
+    const updatedScenes = scene ? moved.map(item => item.id === scene.id ? savedScene : item) : [...moved, savedScene]
+    project.savedScenes = updatedScenes
+    if (clearNote) project.direction = ''
+    return () => {
+      if (project.manuscript === updated && project.savedScenes === updatedScenes) {
+        const restoreMemory = project.manuscriptMemory === updatedMemory
+        setManuscriptText(project, original)
+        if (previousScenes) project.savedScenes = previousScenes
+        else delete project.savedScenes
+        if (restoreMemory && previousMemory) project.manuscriptMemory = previousMemory
+      }
+      if (clearNote && project.direction === '') project.direction = previousNote
+    }
+  })
+  if (!saved) {
+    activeRequest = undefined
+    draft.feedback = '원고에 저장하지 못했어요. 저장 상태를 확인한 뒤 다시 시도해 주세요.'
+    syncControls()
+    return
+  }
+
+  selectedScenes.set(project, savedScene.id)
+  sceneMessages.delete(project)
+  closeContinuation(project)
+  get('direction').value = project.direction
+  renderManuscriptText(updated)
+  activeRequest = undefined
+  syncControls()
+  if (scene) {
+    if (activeWorkspaceTab === manuscriptTab) goToPassage({ ...range, text })
+  } else {
+    manuscript.setSelectionRange(updated.length, updated.length)
+    pendingContinuationStart = start
+    showContinuationStart()
+    if (activeWorkspaceTab === manuscriptTab) manuscript.focus({ preventScroll: true })
+  }
+  if (project.autoMemory) refreshProjectMemory(project)
+  writingStatus.textContent = scene ? `버전 ${selected + 1}의 초안을 장면에 반영했어요.`
+    : `버전 ${selected + 1}의 초안을 원고에 붙였어요.`
 }
 
 async function generateRevision(revision) {
@@ -606,7 +1087,7 @@ async function generateRevision(revision) {
   const view = revisionProposal
   const preview = { original: project.manuscript, revision, text: '', model: '', status: '수정안을 준비하는 중이에요.' }
   const controller = new AbortController()
-  activeRequest = { controller, revision: true }
+  activeRequest = { controller, kind: 'paragraph-revision' }
   revisionDraft = preview
   syncControls()
   get('revision-proposal-position').textContent = passagePosition(revision)
@@ -651,6 +1132,7 @@ async function generateRevision(revision) {
 }
 
 function completionFailure(error, signal) {
+  if (error?.message === writingContextChanged || signal.reason?.message === writingContextChanged) return writingContextChanged
   if (signal.aborted) return '생성을 중지했어요.'
   if (error?.name === 'AbortError') return '요청을 준비하는 동안 원고나 설정이 바뀌었어요. 다시 요청해 주세요.'
   if (error instanceof TypeError) return '서버와 연결이 끊겼어요. 다시 시도해 주세요.'
@@ -741,7 +1223,12 @@ function setWorkspaceTab(activeTab) {
     get(tab.getAttribute('aria-controls')).hidden = !selected
   }
   renderSidebarContext()
-  switchPanel(activeTab === loreWorkspaceTab ? 'lore' : undefined)
+  renderContinuation()
+  const draft = currentContinuation()
+  if (activeTab === manuscriptTab && draft && !draft.showManuscript) switchPanel('continuation')
+  else switchPanel(activeTab === loreWorkspaceTab ? 'lore' : undefined)
+  syncControls()
+  if (activeTab === manuscriptTab) showContinuationStart()
   if (activeTab === noteWorkspaceTab) planAssistant.restoreScroll()
   if (activeTab === loreWorkspaceTab) lorebook.restoreScroll()
 }
@@ -1008,10 +1495,63 @@ function bindNoteImport(id, key) {
   })
 }
 
-bindField('manuscript', value => {
-  setManuscriptText(currentProject(), value)
+const manuscriptSelection = () => ({ start: manuscript.selectionStart, end: manuscript.selectionEnd })
+
+function applyManuscriptInput(inputType, selection) {
+  const project = currentProject()
+  const before = project.manuscript
+  const value = manuscript.value
+  if (value === before) return
+  const scenes = project.savedScenes
+  const replay = scenes?.length && sceneHistoryReplay(sceneUndo, before, value, inputType)
+  const edit = scenes?.length ? replay?.edit ??
+    manuscriptEdit(before, value, selection && !isSceneHistoryEdit(inputType) ? { ...selection, caret: manuscript.selectionStart } : undefined) : undefined
+  setManuscriptText(project, value, edit)
+  if (scenes?.length) {
+    project.savedScenes = reconcileSceneUndo(sceneUndo, before, value, scenes, project.savedScenes, inputType, edit, replay)
+  }
+  sceneMessages.delete(project)
   updateCharacterCount()
+  renderSavedScenes()
   renderMemory()
+  saveWorkspace()
+  writingInputsChanged()
+}
+
+manuscript.addEventListener('compositionstart', () => {
+  manuscriptSelectionBeforeEdit = undefined
+  manuscriptComposition = { project: currentProject(), selection: manuscriptSelection() }
+})
+manuscript.addEventListener('compositionend', () => {
+  const composition = manuscriptComposition
+  manuscriptComposition = undefined
+  if (composition?.project === currentProject()) applyManuscriptInput('insertCompositionText', composition.selection)
+})
+manuscript.addEventListener('beforeinput', event => {
+  if (!manuscriptComposition) manuscriptSelectionBeforeEdit = manuscriptSelection()
+  else if (event.inputType === 'historyUndo') {
+    manuscriptComposition.undo = { text: manuscript.value, caret: manuscript.selectionStart }
+  }
+})
+manuscript.addEventListener('input', event => {
+  if (event.isComposing) {
+    activeRequest?.cancelPreparation?.()
+    return
+  }
+  const composition = manuscriptComposition
+  const selection = composition?.selection ?? manuscriptSelectionBeforeEdit
+  manuscriptComposition = undefined
+  manuscriptSelectionBeforeEdit = undefined
+  if (composition) {
+    const { project, undo } = composition
+    if (project !== currentProject()) return
+    // Chromium can undo an in-progress composition without firing compositionend.
+    if (event.inputType === 'historyUndo' && undo && manuscript.value === project.manuscript) {
+      rememberUndoneComposition(sceneUndo, project.manuscript, undo.text, project.savedScenes, { ...selection, caret: undo.caret })
+      return
+    }
+  }
+  applyManuscriptInput(event.inputType, selection)
 })
 manuscript.addEventListener('scroll', syncManuscriptGutter)
 new ResizeObserver(syncManuscriptGutter).observe(manuscript)
@@ -1027,7 +1567,15 @@ get('author-mode').addEventListener('change', event => {
   saveWorkspace()
   writingInputsChanged()
 })
-for (const event of ['select', 'mouseup', 'keyup']) manuscript.addEventListener(event, updateRevision)
+for (const event of ['select', 'mouseup', 'keyup']) {
+  manuscript.addEventListener(event, () => {
+    updateRevision()
+    if (!scenesPanel.hidden) {
+      sceneMessages.delete(currentProject())
+      syncSceneControls()
+    }
+  })
+}
 revisionLine.addEventListener('input', () => revisionLine.setCustomValidity(''))
 get('revision-line-form').addEventListener('submit', event => {
   event.preventDefault()
@@ -1247,8 +1795,74 @@ get('manuscript-composer').addEventListener('submit', event => {
   event.preventDefault()
   continueManuscript()
 })
-stopWriting.addEventListener('click', () => activeRequest?.controller.abort())
-revisionProposal.stop.addEventListener('click', () => activeRequest?.controller.abort())
+savedSceneList.addEventListener('click', event => {
+  const button = event.target.closest('[data-scene]')
+  if (!button || manuscriptCommitPending()) return
+  const project = currentProject()
+  selectedScenes.set(project, button.dataset.scene)
+  sceneMessages.delete(project)
+  const scene = selectedScene(project)
+  renderSavedScenes()
+  if (scene?.range) {
+    const { start, end } = scene.range
+    goToPassage({ start, end, text: project.manuscript.slice(start, end) })
+  } else {
+    Array.from(savedSceneList.querySelectorAll('button')).find(item => item.dataset.scene === button.dataset.scene)?.focus()
+  }
+  syncSceneControls()
+})
+sceneRewrite.addEventListener('click', openSavedScene)
+sceneRegister.addEventListener('click', () => saveSceneRange())
+sceneConfirmRange.addEventListener('click', () => {
+  const scene = selectedScene()
+  if (scene && !scene.range) saveSceneRange(scene)
+})
+continuationDirection.maxLength = writingFields.direction
+continuationDirection.addEventListener('input', () => {
+  const draft = currentContinuation()
+  draft.direction = continuationDirection.value
+  draft.feedback = ''
+  syncControls()
+})
+get('continuation-composer').addEventListener('submit', event => {
+  event.preventDefault()
+  rewriteContinuation()
+})
+continuationHistory.addEventListener('click', event => {
+  const version = event.target.closest('[data-version]')
+  if (!version) return
+  showContinuationVersion(Number(version.dataset.version))
+  continuationHistory.querySelector(`[data-version="${version.dataset.version}"]`)?.focus()
+})
+continuationPrevious.addEventListener('click', () => {
+  const draft = currentContinuation()
+  const previous = draft.versions[draft.selected].parent
+  if (previous === null) return
+  showContinuationVersion(previous)
+  if (continuationPrevious.hidden) get('continuation-scroll').focus({ preventScroll: true })
+})
+get('return-to-continuation').addEventListener('click', () => {
+  currentContinuation().showManuscript = false
+  renderContinuation()
+  switchPanel('continuation')
+  syncControls()
+  get('continuation-scroll').focus({ preventScroll: true })
+})
+continuationDiscard.addEventListener('click', () => {
+  const draft = currentContinuation()
+  if (continuationDiscard.disabled || !draft) return
+  const project = currentProject()
+  closeContinuation(project)
+  if (draft.scene) {
+    const range = project.savedScenes.find(scene => scene.id === draft.scene.id)?.range
+    if (range) goToPassage({ ...range, text: project.manuscript.slice(range.start, range.end) })
+    else manuscript.focus({ preventScroll: true })
+  } else get('direction').focus({ preventScroll: true })
+})
+continuationAccept.addEventListener('click', acceptContinuation)
+for (const stop of [stopWriting, continuationStop, revisionProposal.stop]) {
+  stop.addEventListener('click', () => activeRequest?.controller?.abort())
+}
 revisionProposal.discard.addEventListener('click', closeRevisionProposal)
 revisionProposal.section.addEventListener('cancel', event => {
   event.preventDefault()
@@ -1261,16 +1875,26 @@ revisionProposal.accept.addEventListener('click', () => {
   if (project.manuscript.slice(start, end) !== original) return
   const text = normalizeLineEndings(revisionDraft.text.trim())
   closeRevisionProposal()
-  saveManuscript(project, project.manuscript.slice(0, start) + text + project.manuscript.slice(end))
+  saveManuscript(project, project.manuscript.slice(0, start) + text + project.manuscript.slice(end), { start, end, inserted: text })
   goToPassage({ start, end: start + text.length, text })
 })
 
-function saveManuscript(project, text) {
-  setManuscriptText(project, text)
-  revisionSelection = undefined
-  manuscript.value = text
-  updateCharacterCount()
+function saveManuscript(project, text, edit) {
+  setManuscriptText(project, text, edit)
   saveWorkspace()
+  renderManuscriptText(text)
+}
+
+function renderManuscriptText(text) {
+  revisionSelection = undefined
+  if (manuscript.value !== text) {
+    sceneUndo.length = 0
+    manuscriptSelectionBeforeEdit = undefined
+    manuscriptComposition = undefined
+    manuscript.value = text
+  }
+  updateCharacterCount()
+  renderSavedScenes()
   renderMemory()
   writingInputsChanged()
 }
@@ -1362,6 +1986,7 @@ get('delete-project-form').addEventListener('submit', async event => {
   }
 
   memoryJobs.get(project)?.controller?.abort()
+  continuations.delete(project)
   deleteProjectDialog.close()
   renderWorkspace()
   fileStatus(`‘${projectName(project)}’을 삭제했어요.`)
@@ -1462,19 +2087,26 @@ get('apply-pack-import').addEventListener('click', async () => {
     get('import-pack').focus()
   }
 })
-function syncWorkspaceFromStorage() {
-  if (!syncSavedWorkspace(readCachedWorkspace())) {
+function syncWorkspaceFromStorage(latest = readCachedWorkspace()) {
+  if (!syncSavedWorkspace(latest)) {
     storageWarning = storageConflictMessage
   }
   showStorageStatus()
 }
 
-window.addEventListener('storage', event => {
-  if (event.key === storageKey || event.key === null) syncWorkspaceFromStorage()
-})
+async function verifyWorkspaceForRequest() {
+  // A tab opened before this release can still update the snapshot without its notification marker.
+  syncWorkspaceFromStorage(await readLatestWorkspace({ full: true }))
+  if (storageWarning === storageConflictMessage || workspaceStorageStatus().conflict || composingManuscript()) {
+    throw new DOMException(writingContextChanged, 'AbortError')
+  }
+}
+
+document.addEventListener(workspaceChangeEvent, () => syncWorkspaceFromStorage())
 window.addEventListener('beforeunload', event => {
   // A rejected edit can exist only in this tab even after the shared cache has finished saving.
-  if (!storageWarning || JSON.stringify(workspace) === (storageReadable ? savedVersion ?? openedSnapshot : openedSnapshot)) return
+  const unsavedWorkspace = storageWarning && hasUnsavedWorkspace()
+  if (!continuations.size && !unsavedWorkspace && !composingManuscript()) return
   event.preventDefault()
   event.returnValue = true
 })

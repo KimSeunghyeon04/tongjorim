@@ -2,11 +2,13 @@ import { randomUUID } from 'node:crypto'
 import { once } from 'node:events'
 import { createServer } from 'node:http'
 import { readFile } from 'node:fs/promises'
+import { promisify } from 'node:util'
+import { gunzip } from 'node:zlib'
 import {
   assistantHistoryTurns, assistantMessageLimit, assistantNoteDraftLimit, assistantRepairTextLimit, assistantReplyLimit,
-  completionPayload, defaultLoreSystemPrompt, defaultMemoryPrompt, defaultNoteSystemPrompt, defaultRevisionPrompt, defaultSystemPrompt,
+  completionPayload, continuationPayload, defaultLoreSystemPrompt, defaultMemoryPrompt, defaultNoteSystemPrompt, defaultRevisionPrompt, defaultSystemPrompt,
   defaultReferences, effectiveSystemPrompt, freeModel, memoryExcerptLimit, memoryOutputLimit, modelIdPattern, validModelId,
-  noteDraftActions, noteKinds, orderedWritingContext, revisionParagraphLimit, systemPromptLimit,
+  noteDraftActions, noteKinds, orderedWritingContext, revisionParagraphLimit, sceneDraftLimit, sceneNeighborLimit, systemPromptLimit,
   validWritingTokenLimit, writingFields,
 } from './public/writing-config.mjs'
 import { actualUsage } from './public/request-tools.mjs'
@@ -15,12 +17,12 @@ import {
 } from './public/model-options.mjs'
 import { loreCardFields, validLoreCardFields } from './public/project-files.mjs'
 import { chunkLimit, embeddingBatchSize, embeddingQueryLimit, loreKinds, loreLimits } from './public/retrieval.mjs'
-import { readWorkspace } from './public/writing-workspace.mjs'
+import { readWorkspace, workspaceInflatedBytes, workspaceRequestBytes } from './public/writing-workspace.mjs'
 
 const baseUrl = 'https://openrouter.ai/api/v1'
 const writingRequestBytes = 1024 * 1024
 const assistantRequestBytes = 768 * 1024 // Allows room for the previous reply in a format repair request.
-const workspaceRequestBytes = 32 * 1024 * 1024
+const inflateGzip = promisify(gunzip)
 const assistantNoRoute = '현재 모델과 제공자 설정으로 JSON 스키마 요청을 처리할 경로가 없어요. 작성 도우미 모델이나 제공자·요청 옵션을 확인해 주세요.'
 const assets = new Map([
   ['/', ['writer.html', 'text/html; charset=utf-8']],
@@ -35,6 +37,7 @@ const assets = new Map([
   ['/writing-workspace.mjs', ['writing-workspace.mjs', 'text/javascript; charset=utf-8']],
   ['/workspace-storage.mjs', ['workspace-storage.mjs', 'text/javascript; charset=utf-8']],
   ['/manuscript-memory.mjs', ['manuscript-memory.mjs', 'text/javascript; charset=utf-8']],
+  ['/manuscript-scenes.mjs', ['manuscript-scenes.mjs', 'text/javascript; charset=utf-8']],
   ['/retrieval.mjs', ['retrieval.mjs', 'text/javascript; charset=utf-8']],
   ['/embedding-index.mjs', ['embedding-index.mjs', 'text/javascript; charset=utf-8']],
   ['/research-panel.mjs', ['research-panel.mjs', 'text/javascript; charset=utf-8']],
@@ -101,10 +104,13 @@ function creditBalance(data) {
   return { balance: data.total_credits - data.total_usage }
 }
 
-async function readJsonRequest(req, maxBytes = 256 * 1024) {
+async function readJsonRequest(req, maxBytes = 256 * 1024, maxInflatedBytes) {
   if (req.headers['content-type']?.split(';')[0].trim() !== 'application/json') {
     throw new RequestError(415, 'JSON 형식으로 요청해 주세요.')
   }
+  const encoding = req.headers['content-encoding']?.toLowerCase()
+  const compressed = encoding === 'gzip' && maxInflatedBytes !== undefined
+  if (encoding && encoding !== 'identity' && !compressed) throw new RequestError(415, '지원하지 않는 요청 압축 형식이에요.')
   const chunks = []
   let size = 0
   for await (const chunk of req.iterator({ destroyOnReturn: false })) {
@@ -117,8 +123,11 @@ async function readJsonRequest(req, maxBytes = 256 * 1024) {
   }
 
   try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'))
-  } catch {
+    const body = Buffer.concat(chunks)
+    const decoded = compressed ? await inflateGzip(body, { maxOutputLength: maxInflatedBytes }) : body
+    return JSON.parse(decoded.toString('utf8'))
+  } catch (error) {
+    if (error.code === 'ERR_BUFFER_TOO_LARGE') throw new RequestError(413, '작업공간이 서버 저장 한도를 넘었어요.')
     throw new RequestError(400, '요청 형식을 확인해 주세요.')
   }
 }
@@ -130,7 +139,7 @@ function resolveSystemPrompt(prompt, fallback) {
   return effectiveSystemPrompt(prompt, fallback)
 }
 
-function writingCompletion({ model, maxTokens, draft, systemPrompt, references }, { allowEmpty = false } = {}) {
+function writingCompletion({ model, maxTokens, draft, systemPrompt, references, sceneRevision }, { allowEmpty = false } = {}) {
   const context = Object.fromEntries(Object.keys(writingFields).map(field => [field, draft?.[field]]))
   context.synopsis ??= ''
   context.manuscriptMemory ??= ''
@@ -150,11 +159,20 @@ function writingCompletion({ model, maxTokens, draft, systemPrompt, references }
     throw new RequestError(400, '모델, 생성 한도와 원고 설정을 확인해 주세요.')
   }
   const prompt = resolveSystemPrompt(systemPrompt, defaultSystemPrompt)
+  if (sceneRevision !== undefined) {
+    const { text, direction, following } = sceneRevision ?? {}
+    if (typeof text !== 'string' || !text.trim() || text.length > sceneDraftLimit ||
+        typeof direction !== 'string' || !direction.trim() || direction.length > writingFields.direction ||
+        (following !== undefined && (typeof following !== 'string' || following.length > sceneNeighborLimit))) {
+      throw new RequestError(400, '수정할 초안과 수정 지시를 확인해 주세요.')
+    }
+    return continuationPayload(model, maxTokens, prompt, included, { text, direction, ...(following ? { following } : {}) })
+  }
   if (!allowEmpty && !Object.entries(included).some(([field, text]) => field !== 'projectTitle' && field !== 'sceneLength' && text.trim())) {
     throw new RequestError(400, '보낼 원고나 메모를 선택하거나 이어쓰기 지시를 입력해 주세요.')
   }
 
-  return completionPayload(model, maxTokens, prompt, included)
+  return continuationPayload(model, maxTokens, prompt, included)
 }
 
 const assistantLoreDraftProperties = {
@@ -586,7 +604,7 @@ export function createTongjorimServer({ apiKey, managementKey, store, port, upst
       } else if (req.method === 'GET' && path === '/api/workspace') {
         json(res, 200, store.readWorkspace())
       } else if (req.method === 'POST' && path === '/api/workspace') {
-        const { revision, snapshot, attempt } = (await readJsonRequest(req, workspaceRequestBytes)) ?? {}
+        const { revision, snapshot, attempt } = (await readJsonRequest(req, workspaceRequestBytes, workspaceInflatedBytes)) ?? {}
         if (typeof snapshot !== 'string' || (revision !== null && (!Number.isSafeInteger(revision) || revision < 1)) ||
             (attempt !== undefined && (typeof attempt !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(attempt)))) {
           throw new RequestError(400, '작품 저장 형식이 올바르지 않아요.')

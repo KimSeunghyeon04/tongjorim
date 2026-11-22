@@ -16,7 +16,8 @@ function action(label, title, click) {
   return button
 }
 
-export function setupResearch({ get, currentProject, saveWorkspace, onChange, goToPassage, passagePosition, addedLoreCards, onSelectLoreCard }) {
+export function setupResearch({ get, currentProject, saveWorkspace, onChange, goToPassage, passagePosition,
+  addedLoreCards, onSelectLoreCard, assertWorkspaceCurrent }) {
   const cache = new WeakMap()
   const localSearch = new WeakMap()
   function settingsChanged() {
@@ -111,9 +112,9 @@ export function setupResearch({ get, currentProject, saveWorkspace, onChange, go
     if (cache.get(project)?.pending) forget(project)
   }
 
-  function searchInput(project, references, cutoff, onlyCached = false) {
+  function searchInput(project, references, cutoff, onlyCached = false, sceneRevision) {
     const manuscript = project.manuscript
-    const direction = writingFieldPrefix('direction', project.direction)
+    const direction = sceneRevision?.direction ?? writingFieldPrefix('direction', project.direction)
     const recent = references.includes('manuscript')
     let local = localSearch.get(project)
     if (onlyCached) {
@@ -129,17 +130,23 @@ export function setupResearch({ get, currentProject, saveWorkspace, onChange, go
     }
     if (!local.inputs.has(cutoff)) {
       if (cutoff > 0) local.corpus ??= chunkManuscript(manuscript)
-      const input = { ...retrievalInput(manuscript, direction, recent, { cutoff, corpus: local.corpus }), corpus: local.corpus }
+      const options = { cutoff, corpus: local.corpus }
+      if (sceneRevision) {
+        options.recentManuscript = sceneRevision.text
+        options.recentLimit = Math.min(240, sourceLimitsFor(project).manuscript)
+      }
+      const input = { ...retrievalInput(manuscript, direction, recent, options), corpus: local.corpus }
       if (local.inputs.size >= 4) local.inputs.delete(local.inputs.keys().next().value)
       local.inputs.set(cutoff, input)
     }
     return local.inputs.get(cutoff)
   }
 
-  function startSearch(project, references, search, input) {
+  function startSearch(project, references, search, input, options) {
     forget(project)
     const controller = new AbortController()
     const modelOptions = modelOptionsFor(project, search.model)
+    const sourceLimitVersion = JSON.stringify(sourceLimitsFor(project))
     const entry = { ...search, modelOptions, routeKey: embeddingRouteKey(search.model, modelOptions),
       manuscript: project.manuscript, direction: project.direction,
       recent: references.includes('manuscript'), chunkCount: input.chunks.length, status: '관련 원문 찾는 중…', controller, pending: true, waiters: 0 }
@@ -153,10 +160,26 @@ export function setupResearch({ get, currentProject, saveWorkspace, onChange, go
         }, usage => {
           entry.usage = usage
           show()
+        }, {
+          ...options,
+          async assertCurrent() {
+            await assertWorkspaceCurrent(project)
+            const enabled = referenceSettingsFor(project).filter(ref => ref.enabled).map(ref => ref.key)
+            if (!enabled.includes('pastPassages') || !sameResearch(entry, project, enabled, searchFor(project)) ||
+                JSON.stringify(sourceLimitsFor(project)) !== sourceLimitVersion) {
+              throw new DOMException('검색할 원고나 설정이 바뀌었어요.', 'AbortError')
+            }
+            options?.assertCurrent?.()
+          },
         })
         entry.status = '키워드 + 의미 검색'
       } catch (error) {
-        controller.signal.throwIfAborted()
+        if (controller.signal.aborted || error?.name === 'AbortError') {
+          if (cache.get(project) === entry) cache.delete(project)
+          show()
+          controller.signal.throwIfAborted()
+          throw error
+        }
         if (entry.estimate) entry.usage = combineUsage(entry.usage, actualUsage())
         entry.status = `키워드 검색 · 의미 검색 실패 (${error.message})`
       }
@@ -166,15 +189,15 @@ export function setupResearch({ get, currentProject, saveWorkspace, onChange, go
     return entry
   }
 
-  async function ensureSearch(project, references, cutoff, signal) {
+  async function ensureSearch(project, references, cutoff, signal, options) {
     signal.throwIfAborted()
     const search = searchFor(project)
     if (!search.enabled || !cutoff) return
-    const input = searchInput(project, references, cutoff)
+    const input = searchInput(project, references, cutoff, false, options?.sceneRevision)
     if (!input.chunks.length || !input.query) return
     const cached = cache.get(project)
     const entry = cached && cached.chunkCount >= input.chunks.length && sameResearch(cached, project, references, search)
-      ? cached : startSearch(project, references, search, input)
+      ? cached : startSearch(project, references, search, input, options)
     if (!entry.pending) return entry
 
     entry.waiters++
@@ -213,7 +236,7 @@ export function setupResearch({ get, currentProject, saveWorkspace, onChange, go
     const empty = { ranked: () => [], status: '검색할 과거 원문 또는 검색어 없음' }
     if (!plan.pastLimit || !plan.cutoff) return empty
     const { references } = plan.body
-    const input = searchInput(project, references, plan.cutoff, onlyCached)
+    const input = searchInput(project, references, plan.cutoff, onlyCached, plan.body.sceneRevision)
     if (!input) return { ...empty, pastPending: plan.canFitPast }
     if (!input.chunks.length || !input.query) return empty
     const search = searchFor(project)
@@ -229,9 +252,9 @@ export function setupResearch({ get, currentProject, saveWorkspace, onChange, go
     }
   }
 
-  function plansFor(project, model, limits = sourceLimitsFor(project)) {
+  function plansFor(project, model, limits = sourceLimitsFor(project), { cards = addedLoreCards(project), sceneRevision } = {}) {
     const references = referenceSettingsFor(project).filter(ref => ref.enabled).map(ref => ref.key)
-    return planWritingContext(project, references, model, limits, addedLoreCards(project))
+    return planWritingContext(project, references, model, limits, cards, sceneRevision)
   }
 
   function inspect(project, model, limits, { onlyCached = false } = {}) {
@@ -266,12 +289,13 @@ export function setupResearch({ get, currentProject, saveWorkspace, onChange, go
     return preparedPlan(project, plansFor(project, model))
   }
 
-  async function prepare(project, model, signal, { retry = false } = {}) {
-    const plan = plansFor(project, model)
-    if (retry) forget(project)
-    if (plan.canFitPast) await ensureSearch(project, plan.body.references, plan.cutoff, signal)
+  async function prepare(project, model, signal, { retry = false, source = project, sceneRevision, assertCurrent } = {}) {
+    const plan = plansFor(source, model, undefined, { cards: addedLoreCards(project), sceneRevision })
+    if (retry) forget(source)
+    if (plan.canFitPast) await ensureSearch(source, plan.body.references, plan.cutoff, signal,
+      { sceneRevision: plan.body.sceneRevision, prune: source === project, assertCurrent })
     signal.throwIfAborted()
-    return preparedPlan(project, plan)
+    return preparedPlan(source, plan)
   }
 
   function renderLoreChoices(cards, focusedCard) {

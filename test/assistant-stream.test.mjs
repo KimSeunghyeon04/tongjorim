@@ -6,9 +6,11 @@ import { request } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
+import { gzipSync } from 'node:zlib'
 import test from 'node:test'
 import { requestCompletion } from '../public/completion.js'
 import { requestAssistantReply } from '../public/writing-assistant.mjs'
+import { readWorkspace } from '../public/writing-workspace.mjs'
 import { createTongjorimServer } from '../server-app.mjs'
 import { openTongjorimStore } from '../tongjorim-store.mjs'
 
@@ -350,4 +352,75 @@ test('이어쓰기에는 기존 옵션과 스트림을 사용하고 Host·Origin
   assert.equal(new Headers(calls[0].headers).has('X-OpenRouter-Metadata'), false)
   await assert.rejects(requestCompletion('/api/write', body, options), /현재 이 모델을 사용할 수 없어요/)
   assert.equal(calls.length, 2)
+})
+
+test('이어쓰기 초안 수정은 선택한 초안과 최신 지시를 기존 원고와 구분해 보낸다', async t => {
+  const { appFetch, calls } = await startApp(t, [completion('발소리는 등 뒤에서 났다.')])
+  const body = {
+    model, maxTokens: 512, references: ['manuscript'], systemPrompt: '3인칭 과거형으로 써 줘.',
+    draft: { projectTitle: '복도 끝의 문', direction: '문을 열기 직전까지 써 줘.', manuscript: '그녀는 손잡이를 잡았다.' },
+    sceneRevision: { text: '복도 끝에서 발소리가 났다.', direction: '등 뒤에서 들리게 바꿔 줘.', following: '그때 전화가 울렸다.' },
+  }
+  const post = input => ({
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input),
+  })
+  const invalid = await appFetch('/api/write', post({ ...body, sceneRevision: { ...body.sceneRevision, direction: ' ' } }))
+  assert.equal(invalid.status, 400)
+  await invalid.text()
+  assert.equal(calls.length, 0)
+  const preview = await appFetch('/api/write/preview', post(body))
+  assert.equal(preview.status, 200)
+  let output = ''
+  await requestCompletion('/api/write', body, { signal: AbortSignal.timeout(5000), onText(text) { output += text } })
+  assert.equal(output, '발소리는 등 뒤에서 났다.')
+  assert.equal(calls.length, 1)
+  const request = calls[0].body
+  assert.deepEqual(request, await preview.json())
+  assert.match(request.messages[0].content, /^3인칭 과거형으로 써 줘\./)
+  assert.match(request.messages[0].content, /sceneRevision\.following은 교체 대상 뒤/)
+  assert.match(request.messages[0].content, /수정 초안 전문만 출력/)
+  assert.deepEqual(JSON.parse(request.messages[1].content), {
+    projectTitle: '복도 끝의 문', direction: '문을 열기 직전까지 써 줘.', manuscript: '그녀는 손잡이를 잡았다.',
+    sceneRevision: { text: '복도 끝에서 발소리가 났다.', direction: '등 뒤에서 들리게 바꿔 줘.', following: '그때 전화가 울렸다.' },
+  })
+})
+
+test('32 MiB를 넘는 작업공간을 압축 저장하고 응답 유실 뒤에도 동시 저장 규칙을 적용한다', async t => {
+  const { appFetch } = await startApp(t, [])
+  const workspace = readWorkspace(null)
+  const project = workspace.projects[0]
+  const body = '창밖에 비가 내렸다. '.repeat(320)
+  project.manuscript = Array(830).fill(body).join('\n\n')
+  project.savedScenes = Array.from({ length: 830 }, (_, index) => ({
+    id: `scene-${index}`, title: '비가 내리는 밤', range: { start: index * (body.length + 2), end: index * (body.length + 2) + body.length },
+    accepted: 0, versions: [
+      { text: body, direction: '비 오는 밤을 묘사해 줘.', parent: null },
+      { text: '비'.repeat(4000), direction: '장면을 길게 써 줘.', parent: 0 },
+      { text: '바람'.repeat(2000), direction: '바람도 불게 해 줘.', parent: 1 },
+    ],
+  }))
+  const attempt = randomUUID()
+  const snapshot = JSON.stringify(workspace)
+  const encode = (revision, snapshot) => gzipSync(JSON.stringify({ revision, snapshot, attempt }))
+  const headers = { 'Content-Type': 'application/json', 'Content-Encoding': 'gzip' }
+  const wire = JSON.stringify({ revision: null, snapshot, attempt })
+  assert.ok(Buffer.byteLength(wire) > 32 * 1024 * 1024)
+  assert.ok(wire.length < 32 * 1024 * 1024)
+  const wrong = await appFetch('/api/workspace', { method: 'POST', headers, body: Buffer.from('gzip 아님') })
+  assert.equal(wrong.status, 400)
+  const response = await appFetch('/api/workspace', { method: 'POST', headers, body: encode(null, snapshot) })
+  assert.equal(response.status, 200)
+  assert.deepEqual(await response.json(), { revision: 1 })
+  const latest = await (await appFetch('/api/workspace')).json()
+  assert.equal(latest.snapshot, snapshot)
+  project.title = '이어지는 편집'
+  const edited = JSON.stringify(workspace)
+  const retry = await appFetch('/api/workspace', { method: 'POST', headers, body: encode(null, edited) })
+  assert.equal(retry.status, 409)
+  const conflict = await retry.json()
+  assert.equal(conflict.committedAttempt, true)
+  assert.equal(conflict.snapshot, snapshot)
+  const noted = await appFetch('/api/workspace', { method: 'POST', headers, body: encode(1, edited) })
+  assert.equal(noted.status, 200)
+  assert.deepEqual(await noted.json(), { revision: 2 })
 })

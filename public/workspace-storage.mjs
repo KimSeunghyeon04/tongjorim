@@ -1,10 +1,14 @@
-import { readWorkspace, storageKey as legacyStorageKey } from './writing-workspace.mjs'
+import { readWorkspace, storageKey as legacyStorageKey, workspaceInflatedBytes, workspaceRequestBytes } from './writing-workspace.mjs'
 
 export const storageKey = 'relay.workspace.sqlite.v1'
 export const workspaceStatusEvent = 'relay:workspace-status'
+export const workspaceChangeEvent = 'relay:workspace-change'
 export const storageConflictMessage = '다른 탭에서 작품이 바뀌어 이 탭의 변경을 저장할 수 없어요.'
+const snapshotOrderKey = `${storageKey}:snapshot-order`
+const notifications = typeof window.BroadcastChannel === 'function' ? new window.BroadcastChannel(storageKey) : null
 const conflictMessage = '서버에 더 최근의 작업공간이 있어요. 이 탭의 작업을 JSON으로 백업해 주세요.'
 const unavailableMessage = '서버에 저장할 수 없어요. 통조림 서버 연결을 확인해 주세요.'
+const sizeMessage = '작업공간이 서버 저장 한도를 넘었어요. 현재 작품을 JSON으로 백업해 주세요.'
 let opening
 let cacheDatabase
 let flushing
@@ -17,7 +21,7 @@ function readCache() {
   if (!memoryOnly) {
     try {
       const entry = JSON.parse(localStorage.getItem(storageKey))
-      if (!entry || (entry.cacheOrder ?? 0) >= (cachedEntry?.cacheOrder ?? 0)) cachedEntry = entry
+      if ((entry?.cacheOrder ?? 0) >= (cachedEntry?.cacheOrder ?? 0)) cachedEntry = entry
     } catch { memoryOnly = true }
   }
   return cachedEntry
@@ -59,9 +63,11 @@ async function changeCache(action) {
     const request = store.get(storageKey)
     let result
     let committed
+    let notify = false
     transaction.onabort = () => reject(transaction.error ?? new Error(unavailableMessage))
     transaction.oncomplete = () => {
       if (committed?.cacheOrder > (readCache()?.cacheOrder ?? 0)) writeCache(committed)
+      if (notify) notifications?.postMessage(committed.snapshotOrder)
       resolve(result)
     }
     request.onsuccess = () => {
@@ -69,8 +75,14 @@ async function changeCache(action) {
         const previous = request.result ?? readCache()
         committed = previous
         result = action(previous, entry => {
-          committed = { ...entry, cacheOrder: (previous?.cacheOrder ?? 0) + 1 }
+          const cacheOrder = (previous?.cacheOrder ?? 0) + 1
+          const snapshotOrder = previous?.snapshot === entry.snapshot ? previous?.snapshotOrder ?? cacheOrder : cacheOrder
+          committed = { ...entry, cacheOrder, snapshotOrder }
           store.put(committed, storageKey)
+          if (snapshotOrder !== previous?.snapshotOrder) {
+            store.put(snapshotOrder, snapshotOrderKey)
+            notify = true
+          }
         })
       } catch (error) {
         transaction.abort()
@@ -88,12 +100,26 @@ function publish() {
   document.dispatchEvent(new Event(workspaceStatusEvent))
 }
 
+async function workspaceUpload(entry) {
+  const headers = { 'Content-Type': 'application/json' }
+  let body = JSON.stringify({ revision: entry.revision, snapshot: entry.snapshot, attempt: entry.attempt })
+  // Small strings are guaranteed to fit. Larger strings need their actual UTF-8 size.
+  if (body.length * 3 > workspaceRequestBytes) {
+    const json = new Blob([body])
+    if (json.size > workspaceRequestBytes) {
+      if (json.size > workspaceInflatedBytes || !globalThis.CompressionStream) throw new Error(sizeMessage)
+      body = await new Response(json.stream().pipeThrough(new CompressionStream('gzip'))).blob()
+      if (body.size > workspaceRequestBytes) throw new Error(sizeMessage)
+      headers['Content-Encoding'] = 'gzip'
+    }
+  }
+  return { method: 'POST', headers, body }
+}
+
 async function requestWorkspace(entry) {
-  const signal = AbortSignal.timeout(8000)
-  const response = await fetch('/api/workspace', entry ? {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ revision: entry.revision, snapshot: entry.snapshot, attempt: entry.attempt }), signal,
-  } : { signal })
+  const upload = entry ? await workspaceUpload(entry) : undefined
+  const response = await fetch('/api/workspace', { ...upload, signal: AbortSignal.timeout(8000) })
+  if (response.status === 413) throw new Error(sizeMessage)
   if (!response.ok && response.status !== 409) throw new Error(unavailableMessage)
   return response.json()
 }
@@ -133,6 +159,37 @@ export function openWorkspaceStorage() {
 
 export function readCachedWorkspace() {
   return readCache()?.snapshot ?? readLegacyWorkspace()
+}
+
+export async function readLatestWorkspace({ full = false } = {}) {
+  const database = await (cacheDatabase ??= openCacheDatabase())
+  if (!database) {
+    const snapshot = readCachedWorkspace()
+    if (memoryOnly) throw new Error('다른 탭의 최신 작품 설정을 확인할 수 없어요.')
+    return snapshot
+  }
+  const cached = cachedEntry
+  const latest = await new Promise((resolve, reject) => {
+    const transaction = database.transaction('workspace', 'readonly')
+    const store = transaction.objectStore('workspace')
+    let entry
+    transaction.onabort = () => reject(transaction.error ?? new Error(unavailableMessage))
+    transaction.oncomplete = () => resolve(entry)
+    const readEntry = () => {
+      const request = store.get(storageKey)
+      request.onsuccess = () => { entry = request.result }
+    }
+    if (full) readEntry()
+    else {
+      const request = store.get(snapshotOrderKey)
+      request.onsuccess = () => {
+        if (request.result !== undefined && request.result === cached?.snapshotOrder) entry = cached
+        else readEntry()
+      }
+    }
+  })
+  if (latest && (!cachedEntry || (latest.cacheOrder ?? 0) > (cachedEntry.cacheOrder ?? 0))) cachedEntry = latest
+  return cachedEntry?.snapshot ?? readLegacyWorkspace()
 }
 
 export async function cacheWorkspace(prepare) {
@@ -183,7 +240,7 @@ function flushWorkspace() {
       publish()
       return true
     }, error => {
-      warning = error.message === conflictMessage ? conflictMessage : unavailableMessage
+      warning = [conflictMessage, sizeMessage].includes(error.message) ? error.message : unavailableMessage
       flushing = undefined
       publish()
       return false
@@ -193,7 +250,7 @@ function flushWorkspace() {
 }
 
 export function workspaceStorageStatus() {
-  return { warning, saving: Boolean(flushing), persisted: cachedEntry?.revision != null }
+  return { warning, conflict: warning === conflictMessage, saving: Boolean(flushing), persisted: cachedEntry?.revision != null }
 }
 
 function retryPendingWorkspace() {
@@ -203,8 +260,17 @@ function retryPendingWorkspace() {
 
 window.addEventListener('online', retryPendingWorkspace)
 window.addEventListener('focus', retryPendingWorkspace)
+
+async function notifyWorkspaceChange(full) {
+  if (!opening) return
+  try { await readLatestWorkspace({ full }) } catch { return }
+  document.dispatchEvent(new Event(workspaceChangeEvent))
+  retryPendingWorkspace()
+}
+
+notifications?.addEventListener('message', () => { void notifyWorkspaceChange(false) })
 window.addEventListener('storage', event => {
-  if (event.key === storageKey) retryPendingWorkspace()
+  if (event.key === storageKey || event.key === null) void notifyWorkspaceChange(true)
 })
 window.addEventListener('beforeunload', event => {
   try {

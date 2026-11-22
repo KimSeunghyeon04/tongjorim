@@ -1,9 +1,11 @@
-import { hasSceneNote, normalizeProject, validProject, validProjectBase } from './project-files.mjs'
+import { hasSceneNote, normalizeProject, referenceSettingsFor, validProject, validProjectBase } from './project-files.mjs'
 import { searchFor } from './retrieval.mjs'
 import { appendParagraphs, freeModel, normalizeLineEndings, optionalProjectModels } from './writing-config.mjs'
 
 // Keep the same storage key so older tabs detect a workspace change before saving.
 export const storageKey = 'relay.writing.v1'
+export const workspaceRequestBytes = 32 * 1024 * 1024
+export const workspaceInflatedBytes = 256 * 1024 * 1024
 const workspaceVersion = 2
 const settingFields = ['model', 'maxTokens', 'modelOptions', ...optionalProjectModels]
 
@@ -70,8 +72,25 @@ export function readWorkspace(serialized) {
   throw new Error('Unknown workspace')
 }
 
+function workspaceContent({ activeProjectId, projects, ...metadata }) {
+  return { ...metadata, projects: projects.map(({ references, ...project }) => ({
+    ...project, references: referenceSettingsFor({ references }),
+  })) }
+}
+
+function sameWorkspaceContent(left, right) {
+  const orderObjectKeys = (_, value) => value && typeof value === 'object' && !Array.isArray(value)
+    ? Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]])) : value
+  return JSON.stringify(left, orderObjectKeys) === JSON.stringify(right, orderObjectKeys)
+}
+
+export function workspaceMatchesSnapshot(workspace, snapshot) {
+  return sameWorkspaceContent(workspaceContent(workspace), workspaceContent(JSON.parse(snapshot)))
+}
+
 function withoutModelSettings(workspace) {
-  return { ...workspace, projects: workspace.projects.map(project => {
+  const { projects, ...metadata } = workspaceContent(workspace)
+  return { ...metadata, projects: projects.map(project => {
     const { search, ...content } = project
     const { model, ...searchSettings } = search ?? {}
     for (const key of settingFields) delete content[key]
@@ -84,7 +103,7 @@ export function mergeModelSettings(workspace, before, after) {
   if (before === null || after === null) return false
   const previous = readWorkspace(before)
   const latest = readWorkspace(after)
-  if (JSON.stringify(withoutModelSettings(previous)) !== JSON.stringify(withoutModelSettings(latest))) return false
+  if (!sameWorkspaceContent(withoutModelSettings(previous), withoutModelSettings(latest))) return false
 
   const changed = new Set()
   for (const [index, nextProject] of latest.projects.entries()) {

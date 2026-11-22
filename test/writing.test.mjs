@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { exportPack, exportProject, readPack, readProject } from '../public/project-files.mjs'
+import { defaultReferenceSettings, exportPack, exportProject, readPack, readProject } from '../public/project-files.mjs'
+import { setManuscriptText } from '../public/manuscript-memory.mjs'
+import { forgetSceneUndo, manuscriptEdit, reconcileSceneUndo, rememberUndoneComposition, sceneHistoryReplay } from '../public/manuscript-scenes.mjs'
 import { activeLore, chunkManuscript, rankPast, retrievalInput, searchPast } from '../public/retrieval.mjs'
 import { actualUsage, combineUsage, estimateUsage } from '../public/request-tools.mjs'
 import { planWritingContext } from '../public/writing-context.mjs'
 import { projectNotesForRequest, sourceLimitsFor, writingFieldPrefix } from '../public/writing-config.mjs'
-import { mergeModelSettings, readWorkspace } from '../public/writing-workspace.mjs'
+import { mergeModelSettings, readWorkspace, workspaceMatchesSnapshot } from '../public/writing-workspace.mjs'
 import { manuscript, passages, queries } from '../scripts/retrieval-fixture.mjs'
 
 test('원문 한도와 검색 범위, 출력 예약을 뺀 컨텍스트와 비용이 함께 바뀐다', () => {
@@ -45,6 +47,32 @@ test('원문 한도와 검색 범위, 출력 예약을 뺀 컨텍스트와 비�
   assert.equal(Number((after.usage.cost - before.usage.cost).toFixed(6)), 0.006)
 })
 
+test('초안 수정은 앞뒤 원고에 한도를 나눠 쓰고 검색 결과를 남은 예산에 맞춘다', () => {
+  const project = {
+    title: '계단', direction: '처음 지시', manuscript: '열쇠는 계단 아래에 숨겨졌다.\n\nBEFORE',
+    model: 'qa/write', maxTokens: 128, systemPrompt: 's',
+  }
+  const scene = { text: '그녀는 방 안으로 들어갔다.', direction: '계단 아래에', following: 'AFTER' }
+  const plan = (references, manuscript, contextLength = 1024, pastPassages = 100) => planWritingContext(
+    project, references, { contextLength }, { manuscript, pastPassages }, undefined, scene,
+  )
+  const refs = ['pastPassages', 'manuscript']
+  const prepared = plan(refs, 6)
+  const result = prepared.finish([{ start: 0, end: 16, text: '열쇠는 계단 아래에 숨겨졌다.' }])
+  assert.equal(prepared.canFitPast, true)
+  assert.equal(result.body.draft.manuscript, 'ORE')
+  assert.equal(result.body.draft.pastPassages, '[원고 1–16자]\n열쇠는 계단 아래에 숨겨졌다.')
+  assert.deepEqual(result.body.sceneRevision, { ...scene, following: 'AFT' })
+  const excluded = plan(['pastPassages'], 6).finish()
+  assert.equal(Object.hasOwn(excluded.body.draft, 'manuscript'), false)
+  assert.equal(Object.hasOwn(excluded.body.sceneRevision, 'following'), false)
+  assert.equal(plan(refs, 0).finish().body.draft.manuscript, '')
+  assert.equal(Object.hasOwn(plan(refs, 0).finish().body.sceneRevision, 'following'), false)
+  assert.equal(plan(refs, 6, 256).canFitPast, false)
+  assert.equal(retrievalInput(project.manuscript, scene.direction, true,
+    { recentManuscript: scene.text, recentLimit: 0 }).query, scene.direction)
+})
+
 test('장면 분량은 참고 자료 없이도 요청에 포함되고 비어 있으면 생략된다', () => {
   const project = { title: '저편', direction: '문을 열어', manuscript: '', model: 'qa/write', maxTokens: 1024 }
   const request = sceneLength => planWritingContext({ ...project, sceneLength }, [], null,
@@ -55,6 +83,196 @@ test('장면 분량은 참고 자료 없이도 요청에 포함되고 비어 있
   assert.equal(body.maxTokens, 1024)
   assert.deepEqual(request('  ').draft, { projectTitle: '저편', direction: '문을 열어' })
   assert.deepEqual(request(undefined).draft, { projectTitle: '저편', direction: '문을 열어' })
+})
+
+test('앞쪽 입력과 장면 내부 편집은 장면 위치를 옮기고 경계를 가로지르면 재확인하게 한다', () => {
+  const project = {
+    manuscript: 'P\n\nABC\n\nDEF\n\nQ',
+    savedScenes: [{ id: 'one', range: { start: 3, end: 6 } }, { id: 'two', range: { start: 8, end: 11 } }],
+  }
+  const locations = () => project.savedScenes.map(({ range }) => range)
+  const insert = 'X\n\n' + project.manuscript
+  setManuscriptText(project, insert, manuscriptEdit(project.manuscript, insert, { start: 0, end: 0, caret: 3 }))
+  assert.deepEqual(locations(), [{ start: 6, end: 9 }, { start: 11, end: 14 }])
+  setManuscriptText(project, 'X\n\nP\n\nA별빛C\n\nDEF\n\nQ', { start: 7, end: 8, inserted: '별빛' })
+  assert.deepEqual(locations(), [{ start: 6, end: 10 }, { start: 12, end: 15 }])
+  assert.equal(project.manuscript.slice(6, 10), 'A별빛C')
+  assert.equal(project.manuscript.slice(12, 15), 'DEF')
+  setManuscriptText(project, 'X\n\nP\n!별빛C\n\nDEF\n\nQ', { start: 5, end: 7, inserted: '!' })
+  assert.deepEqual(locations(), [null, { start: 11, end: 14 }])
+  assert.equal(project.manuscript.slice(11, 14), 'DEF')
+})
+
+test('장면 끝의 이어진 문장과 다음 문단을 구별하고 겹쳐 보이는 삭제는 위치를 확인한다', () => {
+  const project = { manuscript: 'AAA', savedScenes: [{ range: { start: 0, end: 3 } }] }
+  setManuscriptText(project, 'AAA!', { start: 3, end: 3, inserted: '!' })
+  setManuscriptText(project, 'AAA!?\n\n새 장면', { start: 4, end: 4, inserted: '?\n\n새 장면' })
+  assert.deepEqual(project.savedScenes[0].range, { start: 0, end: 5 })
+  const before = 'AAAAAA'
+  const after = 'AAAA'
+  assert.deepEqual(manuscriptEdit(before, after), { start: 4, end: 6, inserted: '', earliest: 0 })
+  assert.deepEqual(manuscriptEdit(before, after, { start: 0, end: 2, caret: 0 }), { start: 0, end: 2, inserted: '' })
+  const ambiguous = { manuscript: before, savedScenes: [{ range: { start: 3, end: 6 } }] }
+  setManuscriptText(ambiguous, after)
+  assert.equal(ambiguous.savedScenes[0].range, null)
+})
+
+test('장면 시작의 같은 줄을 포함하고 인접 장면 사이의 삽입은 줄을 기준으로 나눈다', () => {
+  const first = { id: 'first', range: { start: 0, end: 3 } }
+  const second = { id: 'second', range: { start: 3, end: 6 } }
+  const project = { manuscript: 'ABCDEF', savedScenes: [first, second] }
+  setManuscriptText(project, 'ABCx\ny\nzDEF', { start: 3, end: 3, inserted: 'x\ny\nz' })
+  assert.deepEqual(project.savedScenes.map(({ range }) => range), [{ start: 0, end: 4 }, { start: 7, end: 11 }])
+  setManuscriptText(project, '앞 줄\n첫ABCx\ny\nzDEF', { start: 0, end: 0, inserted: '앞 줄\n첫' })
+  assert.deepEqual(project.savedScenes.map(({ range }) => project.manuscript.slice(range.start, range.end)), ['첫ABCx', 'zDEF'])
+  const shared = { manuscript: 'ABCDEF', savedScenes: [first, second] }
+  setManuscriptText(shared, 'ABCxDEF', { start: 3, end: 3, inserted: 'x' })
+  assert.deepEqual(shared.savedScenes.map(({ range }) => range), [null, null])
+})
+
+test('되돌리기가 경계 편집을 복원하면 장면 위치도 돌아오고 명시적으로 버린 위치는 복원하지 않는다', () => {
+  const range = { start: 3, end: 6 }
+  const valid = [{ id: 'scene', range }]
+  const invalid = [{ id: 'scene', range: null }]
+  const history = []
+  const before = 'P\n\nABC\n\nQ'
+  const after = 'P\n_ BC\n\nQ'
+  const edit = manuscriptEdit(before, after)
+  const reverse = (inputType, from, to, prior, result) => {
+    const replay = sceneHistoryReplay(history, from, to, inputType)
+    return reconcileSceneUndo(history, from, to, prior, result, inputType, replay?.edit, replay)
+  }
+  reconcileSceneUndo(history, before, after, valid, invalid, 'insertText', edit)
+  assert.deepEqual(reverse('historyUndo', after + '.', before, invalid, invalid), invalid)
+  reconcileSceneUndo(history, before, after, valid, invalid, 'insertText', edit)
+  assert.deepEqual(reverse('historyUndo', after, before, invalid, invalid), valid)
+  assert.deepEqual(reverse('historyRedo', before, after, valid, invalid), invalid)
+  forgetSceneUndo(history, 'scene')
+  assert.deepEqual(reverse('historyUndo', after, before, invalid, invalid), invalid)
+})
+
+test('한글 조합을 즉시 되돌렸다가 다시 실행하면 같은 글자가 겹쳐도 장면의 원래 경계를 사용한다', () => {
+  const history = []
+  const before = '가가나'
+  const after = '가가가나'
+  const scene = { id: 'scene', range: { start: 1, end: 3 } }
+  const project = { manuscript: before, savedScenes: [scene] }
+  rememberUndoneComposition(history, before, after, project.savedScenes, { start: 1, end: 1, caret: 2 })
+  assert.deepEqual(project.savedScenes, [{ id: 'scene', range: { start: 1, end: 3 } }])
+  const replay = sceneHistoryReplay(history, before, after, 'historyRedo')
+  setManuscriptText(project, after, replay?.edit)
+  project.savedScenes = reconcileSceneUndo(history, before, after, [scene], project.savedScenes, 'historyRedo', replay?.edit, replay)
+  assert.deepEqual(project.savedScenes, [{ id: 'scene', range: { start: 1, end: 4 } }])
+  assert.equal(project.manuscript.slice(project.savedScenes[0].range.start, project.savedScenes[0].range.end), '가가나')
+})
+
+test('여러 차례 경계 편집을 되돌려도 장면 밖의 말과 따옴표는 밖에 남는다', () => {
+  const history = []
+  const project = { manuscript: 'P “ABC”', savedScenes: [{ id: 'scene', range: { start: 3, end: 6 } }] }
+  const edit = (start, end, inserted, inputType = 'insertText') => {
+    const before = project.manuscript
+    const prior = project.savedScenes
+    const next = before.slice(0, start) + inserted + before.slice(end)
+    const replay = sceneHistoryReplay(history, before, next, inputType)
+    const edit = replay?.edit ?? { start, end, inserted }
+    setManuscriptText(project, next, edit)
+    project.savedScenes = reconcileSceneUndo(history, before, next, prior, project.savedScenes, inputType, edit, replay)
+  }
+  edit(2, 3, '')
+  edit(1, 2, '')
+  edit(1, 1, ' ', 'historyUndo')
+  assert.deepEqual(project.savedScenes[0].range, { start: 2, end: 5 })
+  edit(2, 2, '“', 'historyUndo')
+  assert.deepEqual(project.savedScenes[0].range, { start: 3, end: 6 })
+  edit(3, 3, '새 줄\n앞')
+  edit(3, 8, '', 'historyUndo')
+  assert.equal(project.manuscript, 'P “ABC”')
+  assert.deepEqual(project.savedScenes[0].range, { start: 3, end: 6 })
+  edit(3, 3, '새 줄\n앞', 'historyRedo')
+  assert.deepEqual(project.savedScenes[0].range, { start: 7, end: 11 })
+  assert.equal(project.manuscript.slice(7, 11), '앞ABC')
+})
+
+test('Undo로 복원한 텍스트를 편집 후 등록한 장면이 흡수하지 않는다', () => {
+  const history = []
+  const project = { manuscript: '문장. ABCDEF Q', savedScenes: [{ id: 'original', range: { start: 4, end: 7 } }] }
+  const step = (value, edit, type) => {
+    const before = project.manuscript
+    const prior = project.savedScenes
+    const replay = sceneHistoryReplay(history, before, value, type)
+    setManuscriptText(project, value, replay?.edit ?? edit)
+    project.savedScenes = reconcileSceneUndo(history, before, value, prior, project.savedScenes, type, replay?.edit ?? edit, replay)
+  }
+  step('very long replacement EF Q', { start: 0, end: 8, inserted: 'very long replacement ' }, 'insertText')
+  assert.equal(project.savedScenes[0].range, null)
+  project.savedScenes.push({ id: 'registered', range: { start: 0, end: 24 } })
+  step('문장. ABCDEF Q', undefined, 'historyUndo')
+  assert.deepEqual(project.savedScenes, [
+    { id: 'original', range: { start: 4, end: 7 } }, { id: 'registered', range: null },
+  ])
+})
+
+test('반복된 본문에서 경계를 바꾸지 않은 편집도 Undo와 Redo 순서에 반영된다', () => {
+  const history = []
+  const project = { manuscript: 'aaaaa', savedScenes: [{ id: 'scene', range: { start: 1, end: 2 } }] }
+  function step(value, edit, type = 'insertText') {
+    const before = project.manuscript
+    const prior = project.savedScenes
+    const replay = sceneHistoryReplay(history, before, value, type)
+    const operation = replay?.edit ?? edit
+    setManuscriptText(project, value, operation)
+    project.savedScenes = reconcileSceneUndo(history, before, value, prior, project.savedScenes, type, operation, replay)
+  }
+  step('aaaaaa', { start: 1, end: 1, inserted: 'a' })
+  step('aaaaa', { start: 5, end: 6, inserted: '' })
+  step('aaaaaa', { start: 5, end: 5, inserted: 'a' })
+  step('aaaaa', undefined, 'historyUndo')
+  assert.deepEqual(project.savedScenes[0].range, { start: 1, end: 3 })
+  step('aaaaaa', undefined, 'historyUndo')
+  step('aaaaa', undefined, 'historyUndo')
+  assert.deepEqual(project.savedScenes[0].range, { start: 1, end: 2 })
+  step('aaaaaa', undefined, 'historyRedo')
+  assert.deepEqual(project.savedScenes[0].range, { start: 1, end: 3 })
+})
+
+test('장면 수정의 자동 로어북은 앞 원고와 초안의 대상을 각각 찾는다', () => {
+  const card = (name, aliases = []) => ({ id: name, name, aliases, kind: 'character', description: name, priority: 0 })
+  const project = {
+    title: '예시', direction: '처음 지시', manuscript: '은별이 복도에서 기다렸다.',
+    model: 'qa/write', maxTokens: 128, lorebook: [card('은별'), card('수현'), card('경계', ['기다렸다.\n그는'])],
+  }
+  const revision = { text: '그는 조용히 고개를 끄덕였다. 수현은 돌아섰다.', direction: '행동을 더 짧게 써 줘.' }
+  const plan = references => planWritingContext(project, references, null,
+    { manuscript: 300, pastPassages: 0 }, [], revision).finish()
+  assert.deepEqual(plan(['manuscript', 'lorebook']).lore.filter(card => card.included).map(card => card.name), ['은별', '수현'])
+  assert.equal(Object.hasOwn(plan(['manuscript']).body.draft, 'lorebook'), false)
+})
+
+test('작품 백업은 장면 버전과 위치를 복원하고 줄바꿈을 원고에 맞춘다', () => {
+  const project = {
+    id: 'scene-backup', title: '계단', synopsis: '', model: 'qa/write', maxTokens: 512,
+    manuscript: 'AA\r\n\r\nBBB\r\nC\r\n\r\nD', direction: '',
+    savedScenes: [{
+      id: 'scene-1', title: '계단 위', range: { start: 6, end: 12 },
+      versions: [
+        { text: 'BBB\r\nC', direction: '', parent: null, source: 'registered' },
+        { text: 'EEE\r\nF', direction: '마지막 줄을 고쳐 줘.', parent: 0, truncated: true },
+      ],
+      accepted: 0,
+    }],
+  }
+  const backup = exportProject(project)
+  const restored = readProject(JSON.stringify(backup))
+  assert.equal(restored.manuscript, 'AA\n\nBBB\nC\n\nD')
+  assert.deepEqual(restored.savedScenes, [{
+    id: 'scene-1', title: '계단 위', range: { start: 4, end: 9 },
+    versions: [
+      { text: 'BBB\nC', direction: '', parent: null, source: 'registered' },
+      { text: 'EEE\nF', direction: '마지막 줄을 고쳐 줘.', parent: 0, truncated: true },
+    ], accepted: 0,
+  }])
+  backup.project.savedScenes[0].versions[1].parent = 1
+  assert.throws(() => readProject(JSON.stringify(backup)), /원고나 작품 설정의 형식/)
 })
 
 test('이어쓰기는 참고 자료를 모두 꺼도 긴 줄거리 전문을 그대로 담는다', () => {
@@ -272,6 +490,43 @@ test('다른 탭의 모델 설정을 적용할 때 원고와 프롬프트, 검�
   assert.equal(mergeModelSettings(live, JSON.stringify(next), JSON.stringify(conflict)), false)
   assert.equal(editing.maxTokens, 8193)
   assert.equal(editing.manuscript, '편집 중인 원고')
+})
+
+test('작품 선택과 동일한 기본 참고 설정만 바뀌면 저장 충돌로 판단하지 않는다', () => {
+  const first = { id: 'first', title: '첫 작품', synopsis: '', manuscript: '첫 원고', direction: '', model: 'qa/write', maxTokens: 512 }
+  const second = { ...first, id: 'second', title: '두 번째 작품', manuscript: '두 번째 원고' }
+  const old = { version: 2, activeProjectId: first.id, projects: [first, second] }
+  const latest = structuredClone(old)
+  latest.activeProjectId = second.id
+  latest.projects[0].references = defaultReferenceSettings()
+  const live = structuredClone(old)
+  const oldSnapshot = JSON.stringify(old)
+  assert.deepEqual(mergeModelSettings(live, oldSnapshot, JSON.stringify(latest)), new Set())
+  assert.equal(live.activeProjectId, first.id)
+  assert.equal(workspaceMatchesSnapshot(live, JSON.stringify(latest)), true)
+
+  live.projects[0].manuscript = '저장되지 않은 로컬 원고'
+  assert.equal(workspaceMatchesSnapshot(live, JSON.stringify(latest)), false)
+  const inactive = latest.projects[0].references.find(ref => ref.key === 'manuscript')
+  inactive.enabled = false
+  assert.equal(mergeModelSettings(live, oldSnapshot, JSON.stringify(latest)), false)
+  inactive.enabled = true
+  latest.projects[0].references.reverse()
+  assert.equal(mergeModelSettings(live, oldSnapshot, JSON.stringify(latest)), false)
+  latest.projects[0].references.reverse()
+  latest.projects[1].manuscript = '다른 작품의 실제 편집'
+  assert.equal(mergeModelSettings(live, oldSnapshot, JSON.stringify(latest)), false)
+})
+
+test('다른 탭의 모델 설정을 병합한 순서가 달라도 미저장 변경으로 판단하지 않는다', () => {
+  const project = { id: 'first', title: '첫 작품', synopsis: '', manuscript: '첫 원고', direction: '', model: 'qa/write', maxTokens: 512 }
+  const workspace = { version: 2, activeProjectId: project.id, projects: [project] }
+  const latest = { ...workspace, projects: [{ ...project, memoryModel: 'qa/memory', revisionModel: 'qa/revise' }] }
+  const snapshot = JSON.stringify(latest)
+  assert.deepEqual(mergeModelSettings(workspace, JSON.stringify(workspace), snapshot), new Set([project.id]))
+  assert.equal(workspaceMatchesSnapshot(workspace, snapshot), true)
+  project.memoryModel = 'qa/alternate'
+  assert.equal(workspaceMatchesSnapshot(workspace, snapshot), false)
 })
 
 test('이전 작업공간과 백업은 인물·세계관 메모의 내용과 고정 여부를 카드에 이관한다', () => {

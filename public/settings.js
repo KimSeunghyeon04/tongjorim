@@ -4,7 +4,7 @@ import { modelOptionsFor, reasoningEfforts, samplingRanges, validModelOptions } 
 import { formatCost, jsonRequest } from './request-tools.mjs'
 import { searchFor } from './retrieval.mjs'
 import { currentProjectOf, projectName, readWorkspace } from './writing-workspace.mjs'
-import { cacheWorkspace, openWorkspaceStorage, readCachedWorkspace, storageConflictMessage, storageKey, workspaceStorageStatus } from './workspace-storage.mjs'
+import { cacheWorkspace, openWorkspaceStorage, readCachedWorkspace, readLatestWorkspace, storageConflictMessage, storageKey, workspaceChangeEvent, workspaceStorageStatus } from './workspace-storage.mjs'
 import { optionalProjectModels, validModelId, validWritingTokenLimit } from './writing-config.mjs'
 
 const get = id => document.getElementById(id)
@@ -264,7 +264,7 @@ function setupSettings(root) {
   }
 
   async function saveProjectSetting(projectId, update) {
-    const latest = readCachedWorkspace()
+    const latest = await readLatestWorkspace({ full: true })
     const next = latest === null && serializedWorkspace === null ? structuredClone(workspace) : readWorkspace(latest)
     const project = next.projects.find(item => item.id === projectId)
     if (!project) throw new Error('선택한 작품을 찾을 수 없어요.')
@@ -477,8 +477,7 @@ function setupSettings(root) {
     event.preventDefault()
     saveGenerationLimit()
   })
-  window.addEventListener('storage', event => {
-    if (event.key !== storageKey && event.key !== null) return
+  document.addEventListener(workspaceChangeEvent, () => {
     loadWorkspace()
     if (dialog.open) renderPicker()
   })

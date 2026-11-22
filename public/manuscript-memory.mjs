@@ -1,4 +1,5 @@
 import { requestCompletion } from './completion.js'
+import { manuscriptEdit, moveSavedScenes } from './manuscript-scenes.mjs'
 import { modelOptionsFor } from './model-options.mjs'
 import { memoryExcerptLimit, modelFor, writingFieldPrefix, writingFields } from './writing-config.mjs'
 
@@ -10,11 +11,15 @@ export function memoryForPrompt(project) {
   return memoryReadThrough(project) ? project.manuscriptMemory.text : ''
 }
 
-export function setManuscriptText(project, value) {
+export function setManuscriptText(project, value, edit) {
+  if (value === project.manuscript) return
   const through = memoryReadThrough(project)
   if (through && value.slice(0, through) !== project.manuscript.slice(0, through)) {
-    project.manuscriptMemory.stale = true
+    project.manuscriptMemory = { ...project.manuscriptMemory, stale: true }
   }
+  if (project.savedScenes?.length) project.savedScenes = moveSavedScenes(
+    project.savedScenes, edit ?? manuscriptEdit(project.manuscript, value), value,
+  )
   project.manuscript = value
 }
 

@@ -76,7 +76,9 @@ function writeIndex(db, signal, { additions = [], removals = [] }) {
 }
 
 export async function embedPast(projectId, { model: modelId, modelOptions, routeKey },
-  { corpus, chunks, query }, signal, onEstimate, onUsage) {
+  { corpus, chunks, query }, signal, onEstimate, onUsage, { prune = true, assertCurrent } = {}) {
+  await assertCurrent?.()
+  signal.throwIfAborted()
   const catalog = await jsonRequest('/api/embeddings/models', { signal })
   const model = catalog.models.find(item => item.id === modelId)
   if (!model) throw new Error('이 임베딩 모델이 현재 OpenRouter 모델 목록에 없어요.')
@@ -87,12 +89,14 @@ export async function embedPast(projectId, { model: modelId, modelOptions, route
   const records = new Map(stored.filter(entry => entry.model === routeKey && desired.has(entry.hash))
     .map(entry => [entry.hash, entry.vector]))
   const retained = new Set(hashes.values())
-  const removals = stored.filter(entry => entry.model !== routeKey || !retained.has(entry.hash))
+  const removals = prune ? stored.filter(entry => entry.model !== routeKey || !retained.has(entry.hash)) : []
   const missing = [...desired].filter(([hash]) => !records.has(hash))
   onEstimate(estimateUsage([...missing.map(([, value]) => value), query], 0, model,
     Math.ceil(missing.length / embeddingBatchSize) + 1))
   let usage
   async function embed(kind, input) {
+    await assertCurrent?.()
+    signal.throwIfAborted()
     const data = await jsonRequest('/api/embeddings', { body: { model: modelId, input, kind, modelOptions }, signal })
     usage = combineUsage(usage, data.usage)
     onUsage(usage)

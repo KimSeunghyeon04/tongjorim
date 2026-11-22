@@ -19,11 +19,13 @@ function includesAlias(text, alias) {
   return new RegExp(`(?<!${wordBoundary})${escaped}(?:${koreanParticle})?(?!${wordBoundary})`, 'u').test(text)
 }
 
-export function activeLore(cards, manuscript, direction, added = []) {
-  const text = normalize(`${manuscript.slice(-loreMatchWindow)}\n${direction}`)
+export function activeLore(cards, manuscript, direction, added = [], revision) {
+  const sources = [manuscript.slice(-loreMatchWindow), direction]
+  if (revision) sources.push(revision.text.slice(-loreMatchWindow), revision.direction)
+  const texts = sources.map(normalize)
   const requested = new Set(added)
   const candidates = cards.map(card => {
-    const keywords = [...new Set([card.name, ...card.aliases])].filter(alias => includesAlias(text, alias))
+    const keywords = [...new Set([card.name, ...card.aliases])].filter(alias => texts.some(text => includesAlias(text, alias)))
     const manual = requested.has(card.id)
     const block = `[${loreKinds[card.kind]}] ${card.name}\n${card.description}`
     return { ...card, keywords, manual, block, included: card.always || manual }
@@ -93,15 +95,14 @@ export function chunkManuscript(manuscript) {
 }
 
 export function retrievalInput(manuscript, direction, includeRecent, {
-  cutoff = manuscript.length - defaultSourceLimits.manuscript, corpus,
+  cutoff = manuscript.length - defaultSourceLimits.manuscript, corpus, recentManuscript = manuscript, recentLimit = 240,
 } = {}) {
-  const recentLimit = 240
   const intent = direction.trim().slice(0, embeddingQueryLimit - recentLimit - 1)
   let recent = ''
-  if (includeRecent) {
-    for (const { text } of paragraphRanges(manuscript).slice(-3).reverse()) {
+  if (includeRecent && recentLimit) {
+    for (const { text } of paragraphRanges(recentManuscript).slice(-3).reverse()) {
       if (recent && text.length + recent.length + 1 > recentLimit) break
-      recent = recent ? `${text}\n${recent}` : text.slice(-recentLimit)
+      recent = recent ? `${text}\n${recent}` : text.slice(-recentLimit).toWellFormed()
     }
   }
   const query = [intent, recent].filter(Boolean).join('\n')

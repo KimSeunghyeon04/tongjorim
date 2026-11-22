@@ -55,20 +55,49 @@
       </div>
       <div class="manuscript-view" id="manuscript-view" role="tabpanel" aria-labelledby="manuscript-tab">
         <div class="manuscript-inner">
-          <div class="manuscript-toolbar">
+          <div class="manuscript-toolbar" id="manuscript-toolbar">
             <h1 id="active-project-name"></h1>
             <div class="manuscript-toolbar-actions">
               <span id="save-status" class="save-status" role="status"></span>
+              <button type="button" class="quiet-button" id="return-to-continuation" hidden>초안 보기</button>
               <button type="button" class="quiet-button" id="open-revision">문단 퇴고</button>
             </div>
           </div>
-          <div class="paper">
+          <div class="paper" id="manuscript-paper">
             <div class="paper-label"><label for="manuscript">원고</label><span id="character-count"></span></div>
             <div class="manuscript-editor">
               <div class="manuscript-gutter" aria-hidden="true"><div id="manuscript-lines" class="manuscript-lines"></div></div>
               <textarea id="manuscript" class="manuscript" placeholder="첫 문장을 쓰거나, 이어쓰기 지시로 소설을 시작하세요." spellcheck="false"></textarea>
             </div>
           </div>
+          <section class="paper continuation-paper" id="continuation-paper" aria-labelledby="continuation-project-name" hidden>
+            <div class="continuation-version-bar">
+              <h1 id="continuation-project-name"></h1>
+              <div class="continuation-version-actions">
+                <span id="continuation-version" class="field-hint" role="status"></span>
+                <button type="button" class="quiet-button" id="continuation-previous" hidden>이전 초안 보기</button>
+              </div>
+            </div>
+            <div class="continuation-scroll" id="continuation-scroll" tabindex="0" role="region" aria-label="앞뒤 원고와 초안">
+              <p class="continuation-original" id="continuation-original"></p>
+              <p id="continuation-text"></p>
+              <p class="continuation-following" id="continuation-following" hidden></p>
+            </div>
+            <form class="continuation-composer" id="continuation-composer" aria-label="초안 수정">
+              <div class="continuation-input">
+                <label for="continuation-direction">수정 지시</label>
+                <input class="writing-field" id="continuation-direction" type="text" required
+                  placeholder="바꾸고 싶은 묘사나 전개를 적어 주세요." autocomplete="off">
+                <button class="outline-button" id="continuation-rewrite" type="submit">다시 써줘</button>
+                <button class="outline-button" id="continuation-stop" type="button" hidden>수정 중지</button>
+              </div>
+              <p class="field-hint" id="continuation-status" role="status"></p>
+              <div class="continuation-actions">
+                <button class="quiet-button" id="continuation-discard" type="button">초안 버리기</button>
+                <button class="writing-primary" id="continuation-accept" type="button">원고 끝에 붙이기</button>
+              </div>
+            </form>
+          </section>
         </div>
         <form class="manuscript-composer" id="manuscript-composer" aria-label="이어쓰기">
           <div class="manuscript-composer-fields">
@@ -277,6 +306,8 @@
         <button type="button" data-panel="notes" aria-controls="notes-panel" aria-pressed="false">작품 메모</button>
         <button type="button" data-panel="references" aria-controls="references-panel" aria-pressed="false">참고 자료</button>
         <button type="button" data-panel="lore" aria-controls="lore-panel" aria-pressed="false">로어북</button>
+        <button type="button" data-panel="scenes" aria-controls="scenes-panel" aria-pressed="false">장면</button>
+        <button type="button" id="continuation-tab" data-panel="continuation" aria-controls="continuation-panel" aria-pressed="false" hidden>수정 내역</button>
       </div>
       <div id="draft-tools-panel" class="tool-panel">
         <button class="outline-button" id="preview-request" type="button" aria-controls="request-preview" aria-expanded="false">요청 미리보기</button>
@@ -383,7 +414,7 @@
           <summary>과거 원고 검색</summary>
           <div class="memory-controls">
             <p class="field-hint" id="search-state" role="status"></p>
-            <p class="field-hint" id="embedding-consent">의미 검색을 켜면 과거 문단과 이번 지시를 OpenRouter에 보냅니다. ‘최근 원고’를 켠 경우 검색어에 최근 문단 일부도 포함됩니다. 색인 및 검색에 별도 비용이 발생할 수 있어요.</p>
+            <p class="field-hint" id="embedding-consent">의미 검색을 켜면 과거 문단과 이번 지시를 OpenRouter에 보냅니다. ‘최근 원고’를 켠 경우 검색어에 최근 문단이나 수정 중인 초안 일부도 포함될 수 있습니다. 색인 및 검색에 별도 비용이 발생할 수 있어요.</p>
             <label class="memory-auto"><input id="semantic-enabled" type="checkbox" aria-describedby="embedding-consent"> 의미 검색 켜기</label>
             <p class="field-hint" id="embedding-estimate"></p>
             <p class="field-hint" id="embedding-usage"></p>
@@ -397,6 +428,20 @@
         <p class="field-hint" id="lore-quick-status" role="status"></p>
         <fieldset id="lore-quick-list" class="lore-quick-list" aria-label="로어북 포함 설정"></fieldset>
       </div>
+      <section id="scenes-panel" class="tool-panel" aria-labelledby="scenes-title" hidden>
+        <h2 class="sidebar-heading" id="scenes-title">저장된 장면</h2>
+        <ul class="saved-scene-list" id="saved-scene-list"></ul>
+        <button class="outline-button saved-scene-rewrite" id="saved-scene-rewrite" type="button" hidden>장면 다시 쓰기</button>
+        <div class="scene-registration">
+          <p class="field-hint" id="scene-range-hint" role="status"></p>
+          <button class="quiet-button" id="scene-register" type="button">장면으로 등록</button>
+          <button class="outline-button" id="scene-confirm-range" type="button" hidden>선택 범위로 위치 확인</button>
+        </div>
+      </section>
+      <section id="continuation-panel" class="tool-panel" aria-labelledby="continuation-history-title" hidden>
+        <h2 class="sidebar-heading" id="continuation-history-title">초안 버전</h2>
+        <ol class="continuation-history" id="continuation-history"></ol>
+      </section>
     </aside>
   </div>
   <dialog class="revision-dialog" id="revision-proposal" aria-labelledby="revision-proposal-title">

@@ -18,6 +18,8 @@ export const writingFields = {
 
 export const systemPromptLimit = 8000
 export const revisionParagraphLimit = 18_000
+export const sceneDraftLimit = 80_000
+export const sceneNeighborLimit = 3_600
 export const modelIdPattern = /^[a-z0-9][a-z0-9_.-]*\/[a-z0-9][a-z0-9_.:+-]*$/i
 export const validModelId = value => typeof value === 'string' && value.length <= 200 && modelIdPattern.test(value)
 export const freeModel = { id: 'openrouter/free', name: 'Free Models Router', free: true, input: 0, output: 0, request: 0 }
@@ -69,6 +71,20 @@ export function completionPayload(model, maxTokens, systemPrompt, context) {
       { role: 'user', content: JSON.stringify(context) },
     ],
   }
+}
+
+export function continuationPayload(model, maxTokens, systemPrompt, context, sceneRevision) {
+  const prompt = effectiveSystemPrompt(systemPrompt, defaultSystemPrompt)
+  if (!sceneRevision) return completionPayload(model, maxTokens, prompt, context)
+  const revisionPrompt = [
+    prompt,
+    '이번 작업은 새 장면 생성이 아니라 sceneRevision.text에 있는 이어쓰기 초안 전체의 수정입니다.',
+    'sceneRevision.direction의 최신 수정 지시를 적용하세요. 작가의 노트(direction)와 최신 지시가 충돌하면 최신 지시를 따르세요.',
+    '수정 요청이 없는 대목과 기존 원고와의 연결을 유지하세요. 기존 원고(manuscript)는 참고용입니다.',
+    sceneRevision.following ? 'sceneRevision.following은 교체 대상 뒤에 그대로 이어지는 원고입니다. 뒤 원고와 연결하고 그 문장은 출력하지 마세요.' : '',
+    '수정 대상 자리에 들어갈 수 있게 변경한 부분을 포함한 수정 초안 전문만 출력하세요.',
+  ].filter(Boolean).join('\n')
+  return completionPayload(model, maxTokens, revisionPrompt, { ...context, sceneRevision })
 }
 
 export const effectiveSystemPrompt = (prompt, fallback) => prompt?.trim() ? prompt : fallback

@@ -63,6 +63,10 @@ globalThis.fetch = async (url, options) => {
       openrouter_metadata: { attempt: 0 } }, { status: 404 })
   }
   let text = { 'qa/write': '나래는 마지막 표를 접어 두었다.', 'qa/memory': '나래가 마지막 표를 접어 두었다.', 'qa/revise': '나래는 수정된 표를 손에 쥐었다.' }[body.model]
+  if (body.model === 'qa/write') {
+    const { sceneRevision } = JSON.parse(body.messages.at(-1).content)
+    if (sceneRevision) text = `나래는 고쳐 쓴 장면을 읽었다. ${sceneRevision.direction}`
+  }
   let ending = Object.hasOwn(streamEndings, body.model) ? streamEndings[body.model] : undefined
   if (ending) text = '나래는 마지막 표를...'
   if (body.model === 'qa/plan' || body.model === 'qa/plan-repair') {

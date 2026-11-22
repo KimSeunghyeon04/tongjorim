@@ -1,5 +1,6 @@
 import { chunkManuscript, loreKinds, loreLimits, paragraphRanges } from './retrieval.mjs'
 import { validModelOptionProfiles } from './model-options.mjs'
+import { normalizeSavedScenes, validSavedScenes } from './manuscript-scenes.mjs'
 import { defaultReferences, maxSourceLimits, normalizeLineEndings, noteKinds, optionalProjectModels, systemPromptLimit, validModelId, validSourceLimit, validWritingTokenLimit, writingFields } from './writing-config.mjs'
 
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -15,7 +16,7 @@ const legacyNoteLimit = 12_000
 const legacyReferences = ['synopsis', ...Object.keys(legacyNoteKinds), ...defaultReferences]
 const projectKeys = [
   'title', 'synopsis', 'model', 'maxTokens', 'manuscript', 'direction', 'sceneLength', 'legacySceneNotes',
-  'manuscriptMemory', 'autoMemory', 'lorebook', 'search', 'sourceLimits', 'modelOptions',
+  'manuscriptMemory', 'autoMemory', 'lorebook', 'search', 'sourceLimits', 'modelOptions', 'savedScenes',
   ...optionalProjectModels, ...promptKeys,
 ]
 const loreCardFieldKeys = ['name', 'aliases', 'kind', 'description', 'priority', 'always']
@@ -92,6 +93,7 @@ export function validProject(project) {
     optionalProjectModels.every(key => optional(project[key], validModelId)) &&
     optional(project.search, value => record(value) && validBoolean(value.enabled) && validModelId(value.model)) &&
     optional(project.legacySceneNotes, notes => Array.isArray(notes) && notes.every(hasSceneNote)) &&
+    optional(project.savedScenes, scenes => validSavedScenes(scenes, project.manuscript)) &&
     optional(project.manuscriptMemory, memo => record(memo) && limited(memo.text, writingFields.manuscriptMemory) &&
       validBoolean(memo.stale) && Number.isSafeInteger(memo.through) && memo.through >= 0 &&
       (memo.stale || memo.through <= project.manuscript.length))
@@ -142,6 +144,7 @@ function migrateProjectNotes(project) {
 
 export function normalizeProject(project) {
   const manuscript = normalizeLineEndings(project.manuscript)
+  if (project.savedScenes) project.savedScenes = normalizeSavedScenes(project.savedScenes, project.manuscript, manuscript)
   if (manuscript !== project.manuscript) {
     const memory = project.manuscriptMemory
     if (memory && !memory.stale) {
