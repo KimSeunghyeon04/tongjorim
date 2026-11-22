@@ -6,6 +6,7 @@ UI 설계·구현·검증은 데스크톱 브라우저만 대상으로 한다. �
 
 ## 실행
 
+- Docker Desktop의 Linux 컨테이너에서 실행·업데이트하려면 저장소 루트의 `docker-update.cmd`를 사용한다. Compose는 호스트의 루프백에만 포트를 공개하고 `data/`를 마운트한다. 같은 DB를 사용하는 Node.js 서버는 먼저 종료한다.
 - Node.js 22.13 이상을 사용한다. 외부 패키지 설치나 빌드 단계 없이 저장소 루트에서 `npm start`를 실행한다. PowerShell에서 `npm.ps1` 실행이 막히면 `npm.cmd start`를 사용한다.
 - 기본 주소는 `http://127.0.0.1:4173`이다. `/`는 집필실, `/settings`는 모델 설정이다. 포트는 `PORT`로 바꿀 수 있다.
 - 실제 OpenRouter 요청에는 서버 환경 변수 또는 루트의 `.env`에 `OPENROUTER_API_KEY`를 설정한다. 기존 `OPENROUTER_API` 이름도 지원한다. 키는 서버에서만 읽으며 `.env`와 키는 커밋, 로그, 브라우저 코드에 포함하지 않는다.

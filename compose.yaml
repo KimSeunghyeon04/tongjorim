@@ -1,0 +1,22 @@
+name: tongjorim
+
+services:
+  app:
+    build: .
+    init: true
+    restart: unless-stopped
+    environment:
+      PORT: "${PORT:-4173}"
+      TONGJORIM_BIND_HOST: "0.0.0.0"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      OPENROUTER_API: "${OPENROUTER_API:-}"
+      OPENROUTER_MANAGE: "${OPENROUTER_MANAGE:-}"
+    ports:
+      - "127.0.0.1:${PORT:-4173}:${PORT:-4173}"
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:' + process.env.PORT + '/').then(res => process.exit(res.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 5

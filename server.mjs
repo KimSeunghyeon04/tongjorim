@@ -13,6 +13,7 @@ const apiKey = process.env.OPENROUTER_API_KEY?.trim() || process.env.OPENROUTER_
 const managementKey = process.env.OPENROUTER_MANAGE?.trim()
 const store = openTongjorimStore(process.env.TONGJORIM_DB_PATH || fileURLToPath(new URL('./data/tongjorim.sqlite', import.meta.url)))
 const port = Number(process.env.PORT || 4173)
+const bindHost = process.env.TONGJORIM_BIND_HOST || '127.0.0.1'
 
 const server = createTongjorimServer({ apiKey, managementKey, store, port })
-server.listen(port, '127.0.0.1', () => console.log(`통조림 실행 중 http://127.0.0.1:${port}`))
+server.listen(port, bindHost, () => console.log(`통조림 실행 중 http://127.0.0.1:${port}`))

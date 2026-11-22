@@ -4,27 +4,29 @@
 
 ## 시작하기
 
-Node.js 22.13 이상이 필요합니다. 저장소 루트에서 바로 실행할 수 있으며 별도의 패키지 설치나 빌드가 필요 없습니다.
+AI 기능을 사용하려면 `package.json`과 같은 폴더에 `.env` 파일을 만들고 OpenRouter API 키를 설정합니다.
 
-1. AI 기능을 사용하려면 `package.json`과 같은 폴더에 `.env` 파일을 만들고 OpenRouter API 키를 설정합니다.
+```dotenv
+OPENROUTER_API_KEY=여기에_발급받은_키
+```
 
-   ```dotenv
-   OPENROUTER_API_KEY=여기에_발급받은_키
-   ```
+서버 환경 변수로도 설정할 수 있습니다. 기존 변수 이름인 `OPENROUTER_API`도 지원합니다. API 키는 서버에서만 읽습니다.
 
-   서버 환경 변수로도 설정할 수 있습니다. 기존 변수 이름인 `OPENROUTER_API`도 지원합니다. API 키는 서버에서만 읽습니다.
+### Docker Desktop에서 실행
 
-2. 저장소 루트에서 서버를 실행합니다.
+1. Docker Desktop을 Linux 컨테이너 모드로 실행합니다. 이미 `npm start`로 통조림을 켜 두었다면 먼저 종료합니다.
+2. 저장소 루트의 `docker-update.cmd`를 더블클릭합니다. 현재 폴더의 코드로 이미지를 빌드하고 서버가 응답할 때까지 기다립니다.
+3. 이전에 사용하던 브라우저에서 [집필실](http://127.0.0.1:4173)이나 [모델 설정](http://127.0.0.1:4173/settings)을 엽니다.
 
-   ```sh
-   npm start
-   ```
+코드나 `.env`를 바꾼 뒤에는 `docker-update.cmd`를 다시 실행합니다. 같은 버전을 다시 시작하거나 일시적으로 중지하려면 Docker Desktop의 **Containers**에서 `tongjorim` 프로젝트의 앱 컨테이너를 선택해 **Restart** 또는 **Stop**을 누릅니다.
 
-   Windows PowerShell에서 `npm.ps1` 실행이 차단되면 `npm.cmd start`를 사용합니다.
+컨테이너는 저장소의 `data/tongjorim.sqlite`를 사용하므로 기존 원고와 설정을 그대로 열 수 있습니다. 컨테이너를 다시 만들어도 데이터는 `data/`에 남습니다.
 
-3. 데스크톱 브라우저에서 [집필실](http://127.0.0.1:4173)이나 [모델 설정](http://127.0.0.1:4173/settings)을 엽니다.
+### Node.js로 직접 실행
 
-서버를 종료하려면 실행한 터미널에서 `Ctrl+C`를 누릅니다. 기본 포트가 이미 사용 중이면 `.env`에 `PORT=4174`를 추가하고 서버를 다시 실행한 뒤 해당 포트로 접속합니다.
+Node.js 22.13 이상에서 저장소 루트의 `npm start`로 실행합니다. Windows PowerShell에서 `npm.ps1` 실행이 차단되면 `npm.cmd start`를 사용합니다. 종료하려면 실행한 터미널에서 `Ctrl+C`를 누릅니다.
+
+두 실행 방식 모두 기본 주소는 `http://127.0.0.1:4173`입니다. 다른 앱이 기본 포트를 쓰고 있다면 `.env`에 `PORT=4174`를 추가하고 서버를 다시 실행한 뒤 해당 포트로 접속합니다.
 
 ### OpenRouter 사용량과 크레딧
 
