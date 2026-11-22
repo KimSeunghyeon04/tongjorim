@@ -8,7 +8,10 @@ import {
 import { assistantMessageLimit, assistantNoteDraftLimit, assistantProjectContext, createWritingAssistant, projectNotesLimitHint } from './writing-assistant.mjs'
 import { memoryForPrompt, memoryReadThrough, memoryRequest, setManuscriptText, updateManuscriptMemory } from './manuscript-memory.mjs'
 import { manuscriptMemoryPayload } from './memory-knowledge.mjs'
-import { forgetSceneUndo, isSceneHistoryEdit, manuscriptEdit, reconcileSceneUndo, rememberUndoneComposition, sceneHistoryReplay, sceneRange, sceneRangeAvailable, sceneTitle, sceneVersions } from './manuscript-scenes.mjs'
+import {
+  forgetSceneUndo, isSceneHistoryEdit, manuscriptEdit, manuscriptSceneBlocks, reconcileSceneUndo, rememberUndoneComposition,
+  savedScenesInManuscriptOrder, sceneHistoryReplay, sceneRange, sceneRangeAvailable, sceneTitle, sceneVersions,
+} from './manuscript-scenes.mjs'
 import { exportPack, exportProject, readPack, readProject, referenceSettingsFor } from './project-files.mjs'
 import { currentProjectOf, makeProject, mergeModelSettings, projectName, readWorkspace, workspaceMatchesSnapshot } from './writing-workspace.mjs'
 import { cacheWorkspace, openWorkspaceStorage, readCachedWorkspace, readLatestWorkspace, storageConflictMessage, storageKey, workspaceChangeEvent, workspaceStatusEvent, workspaceStorageStatus } from './workspace-storage.mjs'
@@ -28,6 +31,8 @@ const projectSelect = get('project-select')
 const manuscript = get('manuscript')
 const manuscriptInner = manuscript.closest('.manuscript-inner')
 const manuscriptLines = get('manuscript-lines')
+const manuscriptPaper = get('manuscript-paper')
+const manuscriptScenes = get('manuscript-scenes')
 const revisionLine = get('revision-line')
 const projectTitle = get('project-title')
 const projectTitleDialog = get('project-title-dialog')
@@ -96,6 +101,8 @@ let revisionDraft
 const continuations = new Map()
 const writingContextChanged = '원고나 참고 설정이 바뀌었어요. 현재 설정에서 다시 요청해 주세요.'
 const selectedScenes = new WeakMap()
+const originalManuscriptViews = new WeakSet()
+let renderedSceneManuscript
 const sceneMessages = new WeakMap()
 const sceneUndo = []
 let manuscriptSelectionBeforeEdit
@@ -348,21 +355,94 @@ function selectedScene(project = currentProject()) {
 }
 
 function selectedManuscriptRange(project) {
-  if (get('manuscript-paper').hidden || activeWorkspaceTab !== manuscriptTab || composingManuscript()) return null
+  if (manuscriptPaper.hidden || activeWorkspaceTab !== manuscriptTab || composingManuscript()) return null
   return sceneRange(project.manuscript, manuscript.selectionStart, manuscript.selectionEnd)
+}
+
+function renderManuscriptScenes(project) {
+  const { manuscript: text, savedScenes } = project
+  if (renderedSceneManuscript?.project !== project ||
+      renderedSceneManuscript.text !== text || renderedSceneManuscript.savedScenes !== savedScenes) {
+    const fragment = document.createDocumentFragment()
+    const elements = new Map()
+    let number = 0
+    for (const block of manuscriptSceneBlocks(text, savedScenes)) {
+      const section = document.createElement('section')
+      section.className = 'manuscript-scene'
+      const heading = document.createElement('h2')
+      if (block.scene) {
+        const label = document.createElement('span')
+        label.className = 'manuscript-scene-number'
+        label.textContent = `장면 ${formatNumber.format(++number)}`
+        heading.append(label, ' ', block.scene.title)
+        elements.set(block.scene.id, section)
+      } else {
+        section.classList.add('unregistered')
+        heading.textContent = '미등록 원고'
+      }
+      const body = document.createElement('p')
+      body.className = 'manuscript-scene-text'
+      body.textContent = block.text
+      section.append(heading, body)
+      fragment.append(section)
+    }
+    manuscriptScenes.replaceChildren(fragment)
+    if (renderedSceneManuscript?.project !== project) manuscriptScenes.scrollTop = 0
+    renderedSceneManuscript = { project, text, savedScenes, elements }
+  }
+  const current = manuscriptScenes.querySelector('.is-current')
+  const target = renderedSceneManuscript.elements.get(selectedScenes.get(project))
+  if (current !== target) {
+    current?.classList.remove('is-current')
+    target?.classList.add('is-current')
+  }
+}
+
+function renderManuscriptView() {
+  const project = currentProject()
+  const draft = currentContinuation()
+  const editingDraft = Boolean(draft && !draft.showManuscript)
+  const locatedScenes = project.savedScenes?.reduce((count, scene) => count + Number(Boolean(scene.range)), 0) ?? 0
+  const showScenes = !editingDraft && locatedScenes > 0 && !originalManuscriptViews.has(project)
+  manuscriptPaper.hidden = editingDraft || showScenes
+  manuscriptScenes.hidden = !showScenes
+  get('manuscript-meta').hidden = editingDraft
+  const sceneCount = get('manuscript-scene-count')
+  sceneCount.hidden = !locatedScenes
+  sceneCount.textContent = `장면 ${formatNumber.format(locatedScenes)}개`
+  get('manuscript-view-switch').hidden = editingDraft || !locatedScenes
+  get('show-manuscript-scenes').setAttribute('aria-pressed', String(showScenes))
+  get('show-manuscript-original').setAttribute('aria-pressed', String(!showScenes))
+  if (showScenes) renderManuscriptScenes(project)
+}
+
+function setManuscriptView(showScenes) {
+  const project = currentProject()
+  if (showScenes) originalManuscriptViews.delete(project)
+  else originalManuscriptViews.add(project)
+  renderManuscriptView()
+  renderEstimates()
+  syncControls()
+  if (!showScenes) showContinuationStart()
+}
+
+function scrollToManuscriptScene(id) {
+  if (manuscriptScenes.hidden) return false
+  const target = renderedSceneManuscript.elements.get(id)
+  if (!target) return false
+  manuscriptScenes.scrollTop += target.getBoundingClientRect().top - manuscriptScenes.getBoundingClientRect().top
+  return true
 }
 
 function renderSavedScenes() {
   const project = currentProject()
-  const selected = selectedScenes.get(project)
-  const scenes = [...(project.savedScenes ?? [])].sort((a, b) => (a.range?.start ?? Infinity) - (b.range?.start ?? Infinity))
+  const scenes = savedScenesInManuscriptOrder(project.savedScenes)
   savedSceneList.replaceChildren(...scenes.map(scene => {
     const item = document.createElement('li')
     const button = document.createElement('button')
     button.type = 'button'
     button.className = 'outline-button saved-scene-choice'
     button.dataset.scene = scene.id
-    button.setAttribute('aria-pressed', String(scene.id === selected))
     const title = document.createElement('strong')
     title.textContent = scene.title
     const position = document.createElement('span')
@@ -372,14 +452,18 @@ function renderSavedScenes() {
     item.append(button)
     return item
   }))
+  renderManuscriptView()
   syncSceneControls()
 }
 
 function syncSceneControls() {
   if (scenesPanel.hidden) return
-  for (const button of savedSceneList.querySelectorAll('button')) button.disabled = manuscriptCommitPending()
   const project = currentProject()
   const scene = selectedScene(project)
+  for (const button of savedSceneList.querySelectorAll('button')) {
+    button.disabled = manuscriptCommitPending()
+    button.setAttribute('aria-pressed', String(button.dataset.scene === scene?.id))
+  }
   const range = selectedManuscriptRange(project)
   const busy = Boolean(activeRequest || planAssistant.busy || currentContinuation())
   const canRegister = sceneRangeAvailable(project.savedScenes, range)
@@ -390,11 +474,12 @@ function syncSceneControls() {
   sceneRegister.hidden = !sceneConfirmRange.hidden
   sceneRegister.disabled = busy || !canRegister
   const hint = get('scene-range-hint')
+  const editorLabel = manuscriptScenes.hidden ? '원고' : '전체 원문'
   const message = sceneMessages.get(project) ?? (busy && currentContinuation()
     ? '열려 있는 초안 작업을 마치면 장면을 수정하거나 등록할 수 있어요.'
-    : scene && !scene.range ? '원고에서 이 장면의 범위를 다시 선택해 주세요.'
+    : scene && !scene.range ? `${editorLabel}에서 이 장면의 범위를 다시 선택해 주세요.`
       : canRegister ? `${manuscriptLineRange(range)} 선택됨`
-        : '원고에서 새 범위를 선택하면 장면으로 등록할 수 있어요.')
+        : `${editorLabel}에서 새 범위를 선택하면 장면으로 등록할 수 있어요.`)
   if (hint.textContent !== message) hint.textContent = message
   hint.hidden = !message
 }
@@ -569,7 +654,7 @@ async function loadCatalog() {
 }
 
 function selectedRevision() {
-  return revisionSelection?.original === currentProject().manuscript ? revisionSelection : undefined
+  return !manuscriptPaper.hidden && revisionSelection?.original === currentProject().manuscript ? revisionSelection : undefined
 }
 
 function updateRevision() {
@@ -658,6 +743,7 @@ function goToPassage({ start, end, text }) {
     syncControls()
   }
   setWorkspaceTab(manuscriptTab)
+  setManuscriptView(false)
   manuscript.focus()
   manuscript.setSelectionRange(start, end)
   syncManuscriptGutter()
@@ -870,7 +956,7 @@ async function continueManuscript() {
 function renderContinuation() {
   const draft = currentContinuation()
   const editing = Boolean(draft && !draft.showManuscript)
-  get('manuscript-paper').hidden = editing
+  renderManuscriptView()
   get('manuscript-composer').hidden = Boolean(draft)
   get('continuation-paper').hidden = !editing
   get('continuation-composer').hidden = !editing
@@ -1133,11 +1219,15 @@ async function acceptContinuation() {
   renderManuscriptText(updated)
   activeRequest = undefined
   syncControls()
-  if (scene) {
-    if (activeWorkspaceTab === manuscriptTab) goToPassage({ ...range, text })
-  } else {
+  if (!scene) {
     manuscript.setSelectionRange(updated.length, updated.length)
     pendingContinuationStart = start
+  }
+  if (activeWorkspaceTab === manuscriptTab && scrollToManuscriptScene(savedScene.id)) {
+    manuscriptScenes.focus({ preventScroll: true })
+  } else if (scene) {
+    if (activeWorkspaceTab === manuscriptTab) goToPassage({ ...range, text })
+  } else {
     showContinuationStart()
     if (activeWorkspaceTab === manuscriptTab) manuscript.focus({ preventScroll: true })
   }
@@ -1698,6 +1788,7 @@ get('revision-line-form').addEventListener('submit', event => {
   }
 })
 get('open-revision').addEventListener('click', () => {
+  if (!manuscriptScenes.hidden) setManuscriptView(false)
   updateRevision()
   switchPanel('tools')
   get('revision').open = true
@@ -1901,6 +1992,14 @@ get('manuscript-composer').addEventListener('submit', event => {
   event.preventDefault()
   continueManuscript()
 })
+get('show-manuscript-scenes').addEventListener('click', () => {
+  setManuscriptView(true)
+  switchPanel('scenes')
+})
+get('show-manuscript-original').addEventListener('click', () => {
+  setManuscriptView(false)
+  manuscript.focus({ preventScroll: true })
+})
 savedSceneList.addEventListener('click', event => {
   const button = event.target.closest('[data-scene]')
   if (!button || manuscriptCommitPending()) return
@@ -1908,12 +2007,14 @@ savedSceneList.addEventListener('click', event => {
   selectedScenes.set(project, button.dataset.scene)
   sceneMessages.delete(project)
   const scene = selectedScene(project)
-  renderSavedScenes()
+  renderManuscriptView()
   if (scene?.range) {
-    const { start, end } = scene.range
-    goToPassage({ start, end, text: project.manuscript.slice(start, end) })
-  } else {
-    Array.from(savedSceneList.querySelectorAll('button')).find(item => item.dataset.scene === button.dataset.scene)?.focus()
+    if (!scrollToManuscriptScene(scene.id)) {
+      const { start, end } = scene.range
+      goToPassage({ start, end, text: project.manuscript.slice(start, end) })
+    }
+  } else if (!manuscriptScenes.hidden) {
+    setManuscriptView(false)
   }
   syncSceneControls()
 })
@@ -1961,7 +2062,8 @@ continuationDiscard.addEventListener('click', () => {
   closeContinuation(project)
   if (draft.scene) {
     const range = project.savedScenes.find(scene => scene.id === draft.scene.id)?.range
-    if (range) goToPassage({ ...range, text: project.manuscript.slice(range.start, range.end) })
+    if (scrollToManuscriptScene(draft.scene.id)) manuscriptScenes.focus({ preventScroll: true })
+    else if (range) goToPassage({ ...range, text: project.manuscript.slice(range.start, range.end) })
     else manuscript.focus({ preventScroll: true })
   } else get('direction').focus({ preventScroll: true })
 })
@@ -2223,6 +2325,7 @@ document.addEventListener(settingsChangeEvent, event => {
 document.addEventListener(workspaceStatusEvent, showStorageStatus)
 get('refresh-catalog').addEventListener('click', loadCatalog)
 renderWorkspace()
+if (!manuscriptScenes.hidden) switchPanel('scenes')
 if (savedVersion != null && JSON.stringify(workspace) !== savedVersion) saveWorkspace()
 showStorageStatus()
 loadCatalog()

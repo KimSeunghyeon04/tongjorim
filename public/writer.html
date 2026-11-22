@@ -56,16 +56,24 @@
       <div class="manuscript-view" id="manuscript-view" role="tabpanel" aria-labelledby="manuscript-tab">
         <div class="manuscript-inner">
           <div class="manuscript-toolbar">
-            <h1 id="active-project-name"></h1>
+            <div class="manuscript-heading">
+              <h1 id="active-project-name"></h1>
+              <p class="manuscript-meta" id="manuscript-meta"><span id="manuscript-scene-count" hidden></span><span id="character-count"></span></p>
+            </div>
             <div class="manuscript-toolbar-actions">
               <span id="save-status" class="save-status" role="status"></span>
+              <div class="manuscript-view-switch" id="manuscript-view-switch" role="group" aria-label="원고 표시 방식" hidden>
+                <button type="button" id="show-manuscript-scenes" aria-controls="manuscript-scenes" aria-pressed="false">장면별 보기</button>
+                <button type="button" id="show-manuscript-original" aria-controls="manuscript-paper" aria-pressed="true">전체 원문</button>
+              </div>
               <button type="button" class="quiet-button" id="return-to-continuation" hidden>초안 보기</button>
               <button type="button" class="quiet-button" id="open-revision">문단 퇴고</button>
               <button type="button" class="quiet-button" id="continuation-discard" hidden>초안 버리기</button>
             </div>
           </div>
+          <div class="manuscript-scenes" id="manuscript-scenes" role="region" aria-label="장면별 원고" tabindex="0" hidden></div>
           <div class="paper" id="manuscript-paper">
-            <div class="paper-label"><label for="manuscript">원고</label><span id="character-count"></span></div>
+            <div class="paper-label"><label for="manuscript">원고</label></div>
             <div class="manuscript-editor">
               <div class="manuscript-gutter" aria-hidden="true"><div id="manuscript-lines" class="manuscript-lines"></div></div>
               <textarea id="manuscript" class="manuscript" placeholder="첫 문장을 쓰거나, 이어쓰기 지시로 소설을 시작하세요." spellcheck="false"></textarea>
