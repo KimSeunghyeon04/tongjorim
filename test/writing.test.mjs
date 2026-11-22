@@ -4,7 +4,7 @@ import { defaultReferenceSettings, exportPack, exportProject, readPack, readProj
 import { memoryForPrompt, memoryRequest, setManuscriptText, updateManuscriptMemory } from '../public/manuscript-memory.mjs'
 import { applyMemoryUpdate, manuscriptMemoryPayload } from '../public/memory-knowledge.mjs'
 import { numberedPassages } from '../public/numbered-passages.mjs'
-import { forgetSceneUndo, manuscriptEdit, manuscriptSceneBlocks, reconcileSceneUndo, rememberUndoneComposition, sceneHistoryReplay } from '../public/manuscript-scenes.mjs'
+import { forgetSceneUndo, manuscriptEdit, reconcileSceneUndo, rememberUndoneComposition, sceneHistoryReplay } from '../public/manuscript-scenes.mjs'
 import { activeLore, chunkManuscript, rankPast, retrievalInput, searchPast } from '../public/retrieval.mjs'
 import { actualUsage, combineUsage, estimateUsage } from '../public/request-tools.mjs'
 import { evidenceInScene, markSceneForReview, parseSceneReview, pendingLoreChanges, planReplacement,
@@ -13,27 +13,6 @@ import { planWritingContext } from '../public/writing-context.mjs'
 import { projectNotesForRequest, sourceLimitsFor, writingFieldPrefix } from '../public/writing-config.mjs'
 import { mergeModelSettings, readWorkspace, workspaceMatchesSnapshot } from '../public/writing-workspace.mjs'
 import { manuscript, passages, queries } from '../scripts/retrieval-fixture.mjs'
-
-test('장면별 원고는 현재 범위를 원고 순서대로 표시하고 미등록 본문을 사이에 둔다', () => {
-  const first = { id: 'first', range: { start: 4, end: 6 }, versions: [{ text: '옛 본문' }] }
-  const second = { id: 'second', range: { start: 6, end: 8 } }
-  const third = { id: 'third', range: { start: 18, end: 20 } }
-  const unresolved = { id: 'unresolved', range: null }
-  const scenes = [third, unresolved, second, first]
-  const original = 'H!\n\nABCD\n\nmiddle\n\n끝!\n\nZ'
-
-  assert.deepEqual(manuscriptSceneBlocks(original, scenes), [
-    { scene: null, text: 'H!' },
-    { scene: first, text: 'AB' },
-    { scene: second, text: 'CD' },
-    { scene: null, text: 'middle' },
-    { scene: third, text: '끝!' },
-    { scene: null, text: 'Z' },
-  ])
-  assert.deepEqual(scenes, [third, unresolved, second, first])
-  assert.deepEqual(manuscriptSceneBlocks('  원고\n\n본문  ', [unresolved]), [{ scene: null, text: '원고\n\n본문' }])
-  assert.deepEqual(manuscriptSceneBlocks('\n\t '), [])
-})
 
 test('원문 한도와 검색 범위, 출력 예약을 뺀 컨텍스트와 비용이 함께 바뀐다', () => {
   const project = {

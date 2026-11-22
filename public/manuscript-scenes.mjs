@@ -21,24 +21,6 @@ export function savedScenesInManuscriptOrder(scenes = []) {
   return scenes.toSorted((a, b) => (a.range?.start ?? Infinity) - (b.range?.start ?? Infinity))
 }
 
-export function manuscriptSceneBlocks(manuscript, savedScenes) {
-  const blocks = []
-  let offset = 0
-  function addUnregistered(end) {
-    const text = manuscript.slice(offset, end).trim()
-    if (text) blocks.push({ scene: null, text })
-  }
-  for (const scene of savedScenesInManuscriptOrder(savedScenes)) {
-    if (!scene.range) continue
-    const { start, end } = scene.range
-    addUnregistered(start)
-    blocks.push({ scene, text: manuscript.slice(start, end) })
-    offset = end
-  }
-  addUnregistered(manuscript.length)
-  return blocks
-}
-
 // Prefer the browser's edit position when repeated prose admits multiple matching diffs.
 export function manuscriptEdit(before, after, selection) {
   if (before === after) return null
