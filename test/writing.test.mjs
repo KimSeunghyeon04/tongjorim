@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { defaultReferenceSettings, exportPack, exportProject, readPack, readProject } from '../public/project-files.mjs'
-import { setManuscriptText } from '../public/manuscript-memory.mjs'
+import { memoryForPrompt, memoryRequest, setManuscriptText, updateManuscriptMemory } from '../public/manuscript-memory.mjs'
+import { applyMemoryUpdate, manuscriptMemoryPayload } from '../public/memory-knowledge.mjs'
+import { numberedPassages } from '../public/numbered-passages.mjs'
 import { forgetSceneUndo, manuscriptEdit, reconcileSceneUndo, rememberUndoneComposition, sceneHistoryReplay } from '../public/manuscript-scenes.mjs'
 import { activeLore, chunkManuscript, rankPast, retrievalInput, searchPast } from '../public/retrieval.mjs'
 import { actualUsage, combineUsage, estimateUsage } from '../public/request-tools.mjs'
+import { evidenceInScene, markSceneForReview, parseSceneReview, pendingLoreChanges, planReplacement,
+  resolveSceneReview, sceneResolutionInput, sceneReviewPayload } from '../public/scene-review.mjs'
 import { planWritingContext } from '../public/writing-context.mjs'
 import { projectNotesForRequest, sourceLimitsFor, writingFieldPrefix } from '../public/writing-config.mjs'
 import { mergeModelSettings, readWorkspace, workspaceMatchesSnapshot } from '../public/writing-workspace.mjs'
@@ -12,7 +16,7 @@ import { manuscript, passages, queries } from '../scripts/retrieval-fixture.mjs'
 
 test('원문 한도와 검색 범위, 출력 예약을 뺀 컨텍스트와 비용이 함께 바뀐다', () => {
   const project = {
-    title: '', direction: '', manuscript: `earlier\n\n${'A'.repeat(35)}🧭`, model: 'qa/write', maxTokens: 1024, systemPrompt: 's',
+    title: '', direction: '', manuscript: `earlier\n\n${'A'.repeat(35)}\n\n🧭`, model: 'qa/write', maxTokens: 1024, systemPrompt: 's',
   }
   const model = { contextLength: 1180, input: 0.001, output: 0.002, request: 0.003 }
   const refs = ['manuscript', 'pastPassages']
@@ -22,13 +26,13 @@ test('원문 한도와 검색 범위, 출력 예약을 뺀 컨텍스트와 비�
     const { chunks, query, intent } = retrievalInput(project.manuscript, 'earlier', true, { cutoff: plan.cutoff })
     return rankPast(chunks, query, undefined, intent)
   }
-  const fitted = large.finish(getRank(large))
+  const fitted = large.finish([{ start: 9, end: 44, text: 'A'.repeat(35) }])
   // System message costs 2 tokens. The empty user message is 73 ASCII bytes.
   // Reserving 1,024 output and 128 spare leaves 28 input tokens, so the user message can grow to 104 bytes.
-  assert.equal(fitted.body.draft.manuscript, `${'A'.repeat(27)}🧭`)
-  assert.equal(fitted.cutoff, 17)
+  assert.equal(fitted.body.draft.manuscript, '🧭')
+  assert.equal(fitted.cutoff, 46)
   assert.equal(fitted.originalBudget, 7)
-  assert.equal(fitted.remaining, 0)
+  assert.equal(fitted.remaining, 6)
   assert.equal(fitted.recentReduced, true)
   assert.equal(fitted.pastReduced, true)
   assert.deepEqual(fitted.hits, [])
@@ -45,6 +49,194 @@ test('원문 한도와 검색 범위, 출력 예약을 뺀 컨텍스트와 비�
   assert.equal(after.usage.inputTokens, 28)
   assert.equal(after.remaining, 0)
   assert.equal(Number((after.usage.cost - before.usage.cost).toFixed(6)), 0.006)
+})
+
+test('이어쓰기는 마지막 미등록 문단 전체가 들어가는 한도에서만 최근 원문을 보낸다', () => {
+  const latest = `${'A'.repeat(35)}🧭`
+  const project = {
+    title: '', direction: '', manuscript: `earlier\n\n${latest}`, model: 'qa/write', maxTokens: 1024, systemPrompt: 's',
+  }
+  const refs = ['manuscript', 'pastPassages']
+  const plan = (contextLength, manuscript = 37) => planWritingContext(
+    project, refs, { contextLength }, { manuscript, pastPassages: 99 },
+  )
+  // 1,024 output tokens and 128 spare leave 29 or 30 for input.
+  // The system message costs 2 tokens and the 112-byte user message costs 28.
+  const tooSmall = plan(1181)
+  const blocked = tooSmall.finish()
+  assert.equal(blocked.body.draft.manuscript, '')
+  assert.equal(blocked.cutoff, 46)
+  assert.equal(tooSmall.canFitPast, false)
+  assert.match(blocked.recentWarning, /^모델 컨텍스트에 마지막 문단 전체를 담을 수 없어요\./)
+
+  const exact = plan(1182).finish()
+  assert.equal(exact.body.draft.manuscript, latest)
+  assert.equal(exact.cutoff, 9)
+  assert.equal(exact.usage.inputTokens, 30)
+  assert.equal(exact.remaining, 0)
+  assert.equal(exact.recentWarning, '')
+
+  const belowCharLimit = plan(1182, 36).finish()
+  assert.equal(belowCharLimit.body.draft.manuscript, '')
+  assert.match(belowCharLimit.recentWarning, /^마지막 문단은 37자로, 최근 원문 한도 36자를 넘어요\./)
+})
+
+test('이어쓰기는 잘린 장면을 통째로 요약 범위에 두고 마지막 장면은 분할하지 않는다', () => {
+  const first = '수문.\n\n열쇠.'
+  const latest = '나래.'
+  const project = {
+    title: '', direction: '', manuscript: first + '\n\n' + latest, model: 'qa/write', maxTokens: 100,
+    savedScenes: [
+      { range: { start: 10, end: 13 } },
+      { range: { start: 0, end: 8 } },
+    ],
+  }
+  const plan = limit => planWritingContext(project, ['manuscript'], null, { manuscript: limit, pastPassages: 0 }).finish()
+  assert.equal(plan(7).body.draft.manuscript, latest)
+  assert.equal(plan(7).cutoff, 10)
+  assert.equal(plan(3).body.draft.manuscript, latest)
+  assert.equal(plan(3).recentWarning, '')
+  assert.equal(plan(2).body.draft.manuscript, '')
+  assert.equal(plan(2).recentWarning, '마지막 장면은 3자로, 최근 원문 한도 2자를 넘어요. 한도를 늘리거나 마지막 장면을 나눠 주세요.')
+  assert.equal(plan(0).recentWarning, '')
+})
+
+test('장면 검토 결과는 원문 근거와 줄거리 문구가 있는 항목을 보존하고 카드 승인 전까지 대기한다', () => {
+  const evidence = '수문은 밀물에만 열린다.'
+  const first = '벽의 낙서에 수문은 밀물에만 열린다. 라고 적혀 있었다.'
+  const corridor = '동쪽 회랑은 낮에만 출입할 수 있다.'
+  const sceneText = [first, evidence, corridor].join('\n\n')
+  const synopsis = '1. 수문 규칙을 발견한다.\n수문은 썰물에 열린다.'
+  const card = { id: 'gate', kind: 'world', name: '수문', aliases: [], description: '썰물에 열린다. 수문은 직원이 지킨다.', priority: 0, always: false }
+  const scene = { id: 'scene', title: '발견', range: { start: 3, end: 3 + sceneText.length }, accepted: 0,
+    versions: [{ text: sceneText, direction: '', parent: null }] }
+  const project = {
+    id: 'work', title: '시험', model: 'qa/write', maxTokens: 500, direction: '', synopsis,
+    manuscript: '앞.\n' + sceneText, savedScenes: [scene], lorebook: [card],
+  }
+  markSceneForReview(project, scene)
+  assert.equal(project.sceneReviews[0].pending, true)
+  const suggestion = { kind: 'world', name: '수문', fact: '밀물에만 열린다.', evidenceIds: [2], scope: 'durable' }
+  const input = { model: 'qa/plan', projectTitle: '시험', synopsis, scene: sceneText, cards: [card] }
+  const sent = JSON.parse(sceneReviewPayload(input).messages[1].content)
+  assert.deepEqual(sent.scene, [{ id: 1, text: first }, { id: 2, text: evidence }, { id: 3, text: corridor }])
+  assert.equal(sent.cards, undefined)
+  const result = parseSceneReview(JSON.stringify({
+    progress: [
+      { milestone: '수문 규칙을 발견한다.', completed: true, evidenceIds: [2, 1] },
+      { milestone: '수문 규칙을 발견한다.', completed: true, evidenceIds: [2, 99] },
+      { milestone: '수문은 썰물에 열린다.', completed: false, evidenceIds: [1] },
+      { milestone: '근거 없는 전개', completed: true, evidenceIds: [1] },
+    ],
+    planChange: { before: '수문은 썰물에 열린다.', after: evidence, evidenceIds: [2] },
+    lore: [
+      suggestion, { ...suggestion, name: '동쪽 회랑', fact: corridor, evidenceIds: [3] }, { ...suggestion, evidenceIds: [4] },
+      { ...suggestion, scope: 'temporary', fact: '수문에서 발을 뗐다.' },
+      { ...suggestion, fact: '게시문은 훼손하면 안 된다.' },
+    ],
+  }), input)
+  assert.deepEqual(result.progress, [{ milestone: '1. 수문 규칙을 발견한다.', evidence: [{ text: first, occurrence: 0 }, { text: evidence, occurrence: 1 }] }])
+  assert.equal(planReplacement(synopsis, result.planChange), '1. 수문 규칙을 발견한다.\n수문은 밀물에만 열린다.')
+  assert.equal(planReplacement(synopsis + ' ' + synopsis, result.planChange), null)
+  const resolution = JSON.parse(sceneReviewPayload({ ...input, ...sceneResolutionInput(result) }).messages[1].content)
+  assert.deepEqual(resolution.scene, sent.scene)
+  assert.equal(resolution.synopsis, undefined)
+  assert.deepEqual(resolution.candidates.map(item => item.matchingCards), [[1], [], [1]])
+  assert.deepEqual(resolution.candidates[0].evidence, [evidence])
+  assert.deepEqual(resolution.cards[0].description, [{ id: 1, text: '썰물에 열린다.' }, { id: 2, text: '수문은 직원이 지킨다.' }])
+  const verdicts = {
+    progress_1: { missingPrerequisite: '' },
+    progress_2: { missingPrerequisite: '' },
+    lore_1: { scope: 'standing_rule', card: 1, replaces: 1, fact: '모델이 바꾸려 한 내용' },
+    lore_2: { scope: 'standing_rule', card: -1, replaces: 0 },
+    lore_3: { scope: 'standing_rule', card: 1, replaces: 0 },
+    lore_4: { scope: 'temporary', card: 0, replaces: 0 },
+  }
+  const { lore, progress } = resolveSceneReview(result, input, JSON.stringify(verdicts))
+  assert.deepEqual(progress, result.progress)
+  const prerequisite = { progress: [{ ...result.progress[0], milestone: '자정에 수문을 연다.' }], candidates: [] }
+  assert.deepEqual(resolveSceneReview(prerequisite, input, JSON.stringify({ progress_1: { missingPrerequisite: '자정' } })).progress, [])
+  assert.deepEqual(resolveSceneReview(prerequisite, input, JSON.stringify({ progress_1: { missingPrerequisite: '아침' } })).progress, prerequisite.progress)
+  assert.deepEqual(resolveSceneReview(prerequisite, { ...input, scene: '자정에 수문이 열렸다.' },
+    JSON.stringify({ progress_1: { missingPrerequisite: '자정' } })).progress, prerequisite.progress)
+  const { lore_2, ...missingVerdict } = verdicts
+  assert.equal(lore_2.scope, 'standing_rule')
+  assert.throws(() => resolveSceneReview(result, input, JSON.stringify(missingVerdict)), /근거 대조 결과/)
+  assert.deepEqual(lore.map(item => item.description), [
+    '밀물에만 열린다. 수문은 직원이 지킨다.', corridor, '썰물에 열린다. 수문은 직원이 지킨다.\n\n게시문은 훼손하면 안 된다.',
+  ])
+  const temporaryCandidate = { kind: 'character', name: '나래', fact: '나래가 잠시 손을 놓았다.', evidence: result.candidates[0].evidence }
+  const withTemporary = resolveSceneReview({ ...result, candidates: [...result.candidates, temporaryCandidate] }, input, JSON.stringify(verdicts))
+  assert.deepEqual(withTemporary.lore.map(item => item.description), lore.map(item => item.description))
+  project.sceneReviews[0] = { ...project.sceneReviews[0], progress, planChange: result.planChange, lore, pending: false }
+  const restored = readProject(JSON.stringify(exportProject(project)))
+  assert.equal(restored.lorebook[0].description, '썰물에 열린다. 수문은 직원이 지킨다.')
+  assert.deepEqual(restored.sceneReviews, project.sceneReviews)
+  const start = 5 + first.length
+  assert.deepEqual(pendingLoreChanges(restored)[0].passages, [{ start, end: start + evidence.length, text: evidence }])
+  assert.deepEqual(evidenceInScene({ text: sceneText, start: 3 }, evidence), [{ start: 10, end: 10 + evidence.length, text: evidence }])
+  restored.manuscript = restored.manuscript.replace('밀물', '썰물')
+  assert.deepEqual(pendingLoreChanges(restored).map(item => item.proposal.name), ['동쪽 회랑'])
+})
+
+test('근거 번호는 긴 문단의 이모지를 자르지 않고 원문 위치를 유지한다', () => {
+  const first = '가'.repeat(799)
+  assert.deepEqual(numberedPassages(first + '🧭끝'), [
+    { id: 1, start: 0, text: first }, { id: 2, start: 799, text: '🧭끝' },
+  ])
+})
+
+test('인물 지식은 후속 메모가 생략해도 유지하고 이번 원문에 있는 변경만 적용한다', async t => {
+  const fact = '황동 열쇠 손잡이에 별 모양 균열이 있다.'
+  const original = { fact, knows: ['나래'], unaware: ['현도'], exclusive: true }
+  const first = '나래만 균열을 보고 현도에게 말하지 않았다.'
+  const quiet = '현도는 등대 문을 닫았다.'
+  const informed = '나래는 현도에게 열쇠의 균열을 보여 주었다.'
+  const manuscript = [first, quiet, informed].join('\n\n')
+  const project = { id: 'memory', title: '등대', model: 'qa/memory', maxTokens: 100, manuscript, synopsis: '', direction: '',
+    notePrompts: { memory: '짧게 정리해.' } }
+  const replies = [
+    { summary: '열쇠를 발견했다.', knowledgeChanges: [
+      { id: 0, ...original, unaware: ['현도', '다른 인물'], source: 'excerpt', evidenceIds: [1] },
+    ] },
+    { summary: '등대 문이 닫혔다.', knowledgeChanges: [{ id: 1, ...original, knows: ['현도'], unaware: [], source: 'excerpt', evidenceIds: [2] }] },
+    { summary: '두 사람이 확인했다.', knowledgeChanges: [{ id: 1, ...original, knows: ['나래', '현도'], unaware: [], source: 'excerpt', evidenceIds: [1] }] },
+    '손상된 응답',
+  ]
+  const sent = []
+  t.mock.method(globalThis, 'fetch', async (_path, { body }) => {
+    sent.push(JSON.parse(body))
+    const reply = replies[sent.length - 1]
+    return new Response(JSON.stringify({ type: 'text', content: typeof reply === 'string' ? reply : JSON.stringify(reply) }) + '\n' +
+      JSON.stringify({ type: 'done', truncated: false }) + '\n')
+  })
+  const checkpoint = value => { project.manuscriptMemory = value }
+  const controller = new AbortController()
+  await updateManuscriptMemory(project, first + '\n\n', controller.signal, checkpoint, () => {})
+  await updateManuscriptMemory(project, first + '\n\n' + quiet + '\n\n', controller.signal, checkpoint, () => {})
+  assert.match(memoryForPrompt(project), /균열이 있다\. · 나래만 앎 · 현도 모름/)
+  await updateManuscriptMemory(project, manuscript, controller.signal, checkpoint, () => {})
+  assert.equal(sent[1].excerpt, quiet + '\n\n')
+  assert.deepEqual(sent[2].knowledge, [original])
+  assert.deepEqual(project.manuscriptMemory.knowledge, [{ ...original, knows: ['나래', '현도'], unaware: [] }])
+  const payload = manuscriptMemoryPayload({ ...memoryRequest(project), excerpt: informed })
+  assert.equal(payload.response_format, undefined)
+  assert.ok(payload.messages[0].content.startsWith('짧게 정리해.'))
+  assert.deepEqual(JSON.parse(payload.messages[1].content).excerpt, [{ id: 1, text: informed }])
+  const legacy = manuscriptMemoryPayload({ ...memoryRequest(project), excerpt: informed, knowledge: undefined })
+  assert.equal(JSON.parse(legacy.messages[1].content).excerpt, informed)
+  const restored = readProject(JSON.stringify(exportProject(project)))
+  assert.equal(memoryForPrompt(restored), memoryForPrompt(project))
+  assert.deepEqual(restored.manuscriptMemory, project.manuscriptMemory)
+  const last = project.manuscriptMemory
+  project.manuscript += '\n\n나래는 등을 돌렸다.'
+  await assert.rejects(updateManuscriptMemory(project, project.manuscript, controller.signal, checkpoint, () => {}), /응답 형식/)
+  assert.equal(project.manuscriptMemory, last)
+  assert.throws(() => applyMemoryUpdate(JSON.stringify({ summary: '가'.repeat(8000), knowledgeChanges: [] }),
+    { memory: '', excerpt: quiet, knowledge: [original] }), /합친 원고 메모가 너무 길어요/)
+  const oldChange = JSON.stringify({ summary: quiet, knowledgeChanges: [{ id: 0, ...original, source: 'memory', evidenceIds: [1] }] })
+  assert.deepEqual(applyMemoryUpdate(oldChange, { memory: first, excerpt: quiet, knowledge: null }).knowledge, [original])
+  assert.deepEqual(applyMemoryUpdate(oldChange, { memory: first, excerpt: quiet, knowledge: [] }).knowledge, [])
 })
 
 test('초안 수정은 앞뒤 원고에 한도를 나눠 쓰고 검색 결과를 남은 예산에 맞춘다', () => {

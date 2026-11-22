@@ -1,4 +1,5 @@
 import { memoryForPrompt } from './manuscript-memory.mjs'
+import { wholeRecentManuscript } from './recent-manuscript.mjs'
 import { completionEstimate } from './request-tools.mjs'
 import { activeLore, selectPast } from './retrieval.mjs'
 import {
@@ -53,20 +54,29 @@ export function planWritingContext(project, references, model, limits, addedLore
   const budget = contextLength === null ? null : contextLength - maxTokens - reserve
   const fits = context => budget === null || estimate(context).inputTokens <= budget
   if (revision?.following && !fits(draft)) delete revision.following
+  if (!revision && draft.manuscriptMemory && manuscript.length <= recentLimit &&
+      fits({ ...draft, manuscript, manuscriptMemory: '' })) draft.manuscriptMemory = ''
   const base = estimate(draft)
   let recentReduced = false
+  let recentWarning = ''
   if (references.includes('manuscript')) {
     const requested = Math.min(manuscript.length, recentLimit - (revision?.following?.length ?? 0))
     const full = suffixAt(manuscript, requested)
-    draft.manuscript = fitSuffix(full, manuscript => fits({ ...draft, manuscript }))
+    const suffix = fitSuffix(full, manuscript => fits({ ...draft, manuscript }))
+    if (revision) draft.manuscript = suffix
+    else {
+      const recent = wholeRecentManuscript(project, suffix, recentLimit)
+      draft.manuscript = recent.text
+      recentWarning = recent.warning
+    }
     recentReduced = draft.manuscript.length < full.length
   }
   const cutoff = manuscript.length - (draft.manuscript?.length ?? 0)
   const pastLimit = references.includes('pastPassages') ? limits.pastPassages : 0
-  const canFitPast = pastLimit > 0 && (budget === null || estimate(draft).inputTokens < budget)
+  const canFitPast = !recentWarning && pastLimit > 0 && (budget === null || estimate(draft).inputTokens < budget)
   const body = { model: project.model, maxTokens, systemPrompt, references, draft, ...(revision ? { sceneRevision: revision } : {}) }
   return {
-    cutoff, pastLimit, canFitPast, body,
+    cutoff, pastLimit, canFitPast, recentWarning, body,
     finish(ranked = []) {
       let pastReduced = false
       const { hits, text } = selectPast(ranked, pastLimit, candidate => {
@@ -80,7 +90,7 @@ export function planWritingContext(project, references, model, limits, addedLore
         body: { ...body, draft: context }, lore: lore.candidates, hits, cutoff, usage, contextLength, reserve,
         originalBudget: budget === null ? null : budget - base.inputTokens,
         remaining: budget === null ? null : budget - usage.inputTokens,
-        recentReduced, pastReduced,
+        recentReduced, recentWarning, pastReduced,
         outputTooLarge: model?.maxCompletionTokens != null && maxTokens > model.maxCompletionTokens,
       }
     },

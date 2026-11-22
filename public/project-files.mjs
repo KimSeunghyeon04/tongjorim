@@ -1,6 +1,8 @@
 import { chunkManuscript, loreKinds, loreLimits, paragraphRanges } from './retrieval.mjs'
 import { validModelOptionProfiles } from './model-options.mjs'
 import { normalizeSavedScenes, validSavedScenes } from './manuscript-scenes.mjs'
+import { memoryWithKnowledge, validKnowledge } from './memory-knowledge.mjs'
+import { validSceneReviews } from './scene-review.mjs'
 import { defaultReferences, maxSourceLimits, normalizeLineEndings, noteKinds, optionalProjectModels, systemPromptLimit, validModelId, validSourceLimit, validWritingTokenLimit, writingFields } from './writing-config.mjs'
 
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -16,7 +18,7 @@ const legacyNoteLimit = 12_000
 const legacyReferences = ['synopsis', ...Object.keys(legacyNoteKinds), ...defaultReferences]
 const projectKeys = [
   'title', 'synopsis', 'model', 'maxTokens', 'manuscript', 'direction', 'sceneLength', 'legacySceneNotes',
-  'manuscriptMemory', 'autoMemory', 'lorebook', 'search', 'sourceLimits', 'modelOptions', 'savedScenes',
+  'manuscriptMemory', 'autoMemory', 'lorebook', 'search', 'sourceLimits', 'modelOptions', 'savedScenes', 'sceneReviews',
   ...optionalProjectModels, ...promptKeys,
 ]
 const loreCardFieldKeys = ['name', 'aliases', 'kind', 'description', 'priority', 'always']
@@ -94,7 +96,10 @@ export function validProject(project) {
     optional(project.search, value => record(value) && validBoolean(value.enabled) && validModelId(value.model)) &&
     optional(project.legacySceneNotes, notes => Array.isArray(notes) && notes.every(hasSceneNote)) &&
     optional(project.savedScenes, scenes => validSavedScenes(scenes, project.manuscript)) &&
+    optional(project.sceneReviews, validSceneReviews) &&
     optional(project.manuscriptMemory, memo => record(memo) && limited(memo.text, writingFields.manuscriptMemory) &&
+      optional(memo.knowledge, knowledge => validKnowledge(knowledge) &&
+        memoryWithKnowledge(memo.text, knowledge).length <= writingFields.manuscriptMemory) &&
       validBoolean(memo.stale) && Number.isSafeInteger(memo.through) && memo.through >= 0 &&
       (memo.stale || memo.through <= project.manuscript.length))
 }
@@ -150,6 +155,17 @@ export function normalizeProject(project) {
     if (memory && !memory.stale) {
       memory.through = normalizeLineEndings(project.manuscript.slice(0, memory.through)).length
     }
+    if (project.sceneReviews) {
+      const normalizeEvidence = entry => ({
+        ...entry, evidence: Array.isArray(entry.evidence)
+          ? entry.evidence.map(item => ({ ...item, text: normalizeLineEndings(item.text) }))
+          : normalizeLineEndings(entry.evidence),
+      })
+      project.sceneReviews = project.sceneReviews.map(review => ({
+        ...review, progress: review.progress.map(normalizeEvidence), lore: review.lore.map(normalizeEvidence),
+        planChange: review.planChange && normalizeEvidence(review.planChange),
+      }))
+    }
     project.manuscript = manuscript
   }
   migrateProjectNotes(project)
@@ -162,7 +178,22 @@ function clean(source, keys) {
   if (result.references) result.references = currentReferences(result.references)
   if (result.search) result.search = pick(result.search, ['enabled', 'model'])
   if (result.sourceLimits) result.sourceLimits = pick(result.sourceLimits, Object.keys(maxSourceLimits))
-  if (result.manuscriptMemory) result.manuscriptMemory = pick(result.manuscriptMemory, ['text', 'through', 'stale'])
+  if (result.manuscriptMemory) {
+    result.manuscriptMemory = pick(result.manuscriptMemory, ['text', 'through', 'stale', 'knowledge'])
+    if (result.manuscriptMemory.knowledge) result.manuscriptMemory.knowledge = result.manuscriptMemory.knowledge
+      .map(item => pick(item, ['fact', 'knows', 'unaware', 'exclusive']))
+  }
+  const reviewEntry = (entry, fields) => {
+    const cleaned = pick(entry, [...fields, 'evidence'])
+    if (Array.isArray(cleaned.evidence)) cleaned.evidence = cleaned.evidence.map(ref => pick(ref, ['text', 'occurrence']))
+    return cleaned
+  }
+  if (result.sceneReviews) result.sceneReviews = result.sceneReviews.map(review => ({
+    ...pick(review, ['sceneId', 'version', 'pending']),
+    progress: review.progress.map(item => reviewEntry(item, ['milestone'])),
+    planChange: review.planChange && reviewEntry(review.planChange, ['before', 'after']),
+    lore: review.lore.map(item => reviewEntry(item, ['id', 'targetId', 'kind', 'name', 'before', 'description', 'conflict'])),
+  }))
   if (result.legacySceneNotes) result.legacySceneNotes = result.legacySceneNotes.map(note => pick(note, ['title', 'direction']))
   return result
 }

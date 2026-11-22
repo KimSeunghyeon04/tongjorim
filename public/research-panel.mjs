@@ -361,5 +361,5 @@ export function setupResearch({ get, currentProject, saveWorkspace, onChange, go
     forget(project)
     settingsChanged()
   })
-  return { render, renderState, prepare, preview, renderResults, inspect, refreshSearch }
+  return { render, renderState, plan: plansFor, prepare, preview, renderResults, inspect, refreshSearch }
 }

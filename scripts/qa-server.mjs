@@ -12,6 +12,7 @@ const qaApiKey = 'relay-qa-key'
 const qaManagementKey = 'relay-qa-management-key'
 const otherEmbeddingModel = 'qa/another-embedding'
 const answerKeys = ['fox', 'elevator', 'sailor']
+const sluiceRule = '북쪽 수문은 밀물 때 열쇠 두 개를 함께 돌려야 열린다.'
 const models = ['write', 'memory', 'revise', 'plan', 'plan-repair'].map(name => ({
   id: `qa/${name}`, name: `QA ${name}`, architecture: { input_modalities: ['text'], output_modalities: ['text'] },
   context_length: 8192, top_provider: { context_length: 6144, max_completion_tokens: 4096 },
@@ -64,12 +65,34 @@ globalThis.fetch = async (url, options) => {
   }
   let text = { 'qa/write': '나래는 마지막 표를 접어 두었다.', 'qa/memory': '나래가 마지막 표를 접어 두었다.', 'qa/revise': '나래는 수정된 표를 손에 쥐었다.' }[body.model]
   if (body.model === 'qa/write') {
-    const { sceneRevision } = JSON.parse(body.messages.at(-1).content)
+    const { sceneRevision, direction } = JSON.parse(body.messages.at(-1).content)
     if (sceneRevision) text = `나래는 고쳐 쓴 장면을 읽었다. ${sceneRevision.direction}`
+    else if (direction === '북쪽 수문의 규칙을 발견한다.') text = sluiceRule
   }
   let ending = Object.hasOwn(streamEndings, body.model) ? streamEndings[body.model] : undefined
   if (ending) text = '나래는 마지막 표를...'
-  if (body.model === 'qa/plan' || body.model === 'qa/plan-repair') {
+  if (body.response_format?.json_schema?.name === 'scene_review') {
+    const { scene, synopsis } = JSON.parse(body.messages.at(-1).content)
+    const evidence = scene.find(passage => passage.text.includes(sluiceRule))?.id
+    const milestone = '나래가 북쪽 수문의 규칙을 발견한다.'
+    const before = '수문은 열쇠 하나로 열린다.'
+    text = JSON.stringify({
+      progress: evidence && synopsis.includes(milestone) ? [{ milestone, completed: true, evidenceIds: [evidence] }] : [],
+      planChange: evidence && synopsis.includes(before) ? { before, after: sluiceRule, evidenceIds: [evidence] } : null,
+      lore: evidence ? [{ kind: 'world', name: '북쪽 수문', fact: sluiceRule, evidenceIds: [evidence], scope: 'durable' }]
+        : [],
+    })
+  } else if (body.response_format?.json_schema?.name === 'scene_lore_resolution') {
+    const { cards, candidates, progressCandidates } = JSON.parse(body.messages.at(-1).content)
+    text = JSON.stringify(Object.fromEntries([
+      ...progressCandidates.map(({ id }) => ['progress_' + id, { missingPrerequisite: '' }]),
+      ...candidates.map(candidate => {
+        const card = cards.find(item => item.name === candidate.name)
+        const unchanged = card?.description.some(passage => passage.text === candidate.fact)
+        return ['lore_' + candidate.id, { scope: 'standing_rule', card: unchanged ? -1 : card?.id ?? 0, replaces: card && !unchanged ? 1 : 0 }]
+      }),
+    ]))
+  } else if (body.model === 'qa/plan' || body.model === 'qa/plan-repair') {
     const { card, mode, noteAction, request, previousReply } = JSON.parse(body.messages.at(-1).content)
     const reply = mode === 'draft' ? '작품 설정을 토대로 초안을 만들었어요.' : `요청을 검토했어요. ${request}`
     const draft = card ? { ...card, name: card.name || '안개역', description: '안개가 내리는 밤에만 열리는 역.' }
@@ -79,6 +102,10 @@ globalThis.fetch = async (url, options) => {
     if (body.model === 'qa/plan-repair' && previousReply !== undefined && noteAction === 'replace') {
       ending = streamEndings['qa/truncated']
     }
+  }
+  const input = JSON.parse(body.messages.at(-1).content)
+  if (Array.isArray(input.excerpt) && Object.hasOwn(input, 'knowledge')) {
+    text = JSON.stringify({ summary: '나래가 마지막 표를 접어 두었다.', knowledgeChanges: [] })
   }
   if (!text) return Response.json({ error: { message: 'Unexpected model' } }, { status: 400 })
   const events = [

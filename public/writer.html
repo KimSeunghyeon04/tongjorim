@@ -46,7 +46,7 @@
       <div class="workspace-tabs" role="tablist" aria-label="작업 화면">
         <button type="button" id="manuscript-tab" role="tab" aria-selected="true" aria-controls="manuscript-view">원고</button>
         <button type="button" id="note-workspace-tab" role="tab" aria-selected="false" aria-controls="note-planner" tabindex="-1">줄거리 도우미</button>
-        <button type="button" id="lore-workspace-tab" role="tab" aria-selected="false" aria-controls="lore-workspace" tabindex="-1">로어북</button>
+        <button type="button" id="lore-workspace-tab" role="tab" aria-selected="false" aria-controls="lore-workspace" tabindex="-1">로어북 <span class="lore-review-count" id="lore-tab-count" hidden></span></button>
       </div>
       <div id="storage-error" class="storage-error" hidden>
         <p id="storage-error-message" role="alert"></p>
@@ -117,6 +117,11 @@
             <p class="field-hint" id="writing-model-name"></p>
             <p class="field-hint" id="writing-estimate"></p>
             <p class="field-hint" id="writing-status" role="status"></p>
+            <div class="lore-review-notice" id="lore-review-notice" hidden>
+              <p id="lore-review-notice-message" role="status"></p>
+              <button type="button" class="quiet-button" id="open-lore-review">검토하기</button>
+              <button type="button" class="quiet-button" id="retry-scene-review" hidden>다시 시도</button>
+            </div>
           </div>
           <p class="field-hint" id="writing-context-limit" role="status" hidden></p>
         </form>
@@ -146,6 +151,12 @@
           <button type="button" class="quiet-button" id="edit-plan-prompt" aria-haspopup="dialog" aria-controls="prompt-dialog">프롬프트 편집</button>
         </div>
         <div class="note-conversation" id="plan-conversation" role="region" aria-label="대화와 초안" tabindex="0">
+          <section class="plan-scene-review" id="plan-scene-review" aria-labelledby="plan-scene-review-title" hidden>
+            <h2 id="plan-scene-review-title">줄거리 진행</h2>
+            <ul id="plan-milestones" class="plan-milestones"></ul>
+            <div id="plan-scene-suggestion"></div>
+            <p class="field-hint" id="plan-scene-status" role="status"></p>
+          </section>
           <p class="note-empty" id="plan-empty">아이디어를 보내거나 기존 줄거리를 바탕으로 초안을 만들어 보세요.</p>
           <ol class="assistant-transcript" id="plan-transcript" aria-label="메모 작성 대화" hidden></ol>
           <section class="note-draft" id="note-draft" aria-labelledby="note-draft-title" hidden>
@@ -183,6 +194,11 @@
         </form>
       </section>
       <section class="lore-workspace" id="lore-workspace" role="tabpanel" aria-labelledby="lore-workspace-tab" hidden>
+        <nav class="lore-workspace-nav" aria-label="로어북 보기">
+          <button type="button" id="lore-cards-tab" aria-pressed="true" aria-controls="lore-cards-view">카드 목록</button>
+          <button type="button" id="lore-review-tab" aria-pressed="false" aria-controls="lore-review-view">수정안 <span class="lore-review-count" id="lore-review-count" hidden></span></button>
+        </nav>
+        <div class="lore-cards-view" id="lore-cards-view">
         <section class="lore-screen" id="lore-library" aria-labelledby="lore-library-title">
           <header class="lore-workspace-toolbar">
             <div class="lore-toolbar-row">
@@ -291,6 +307,18 @@
                 <p class="field-hint" id="lore-context">현재 카드와 줄거리, 관련 로어북 카드, 대화와 초안을 OpenRouter에 보내요.</p>
               </form>
             </section>
+          </div>
+        </section>
+        </div>
+        <section class="lore-review-view" id="lore-review-view" aria-label="로어북 수정안" hidden>
+          <aside class="lore-review-queue" aria-labelledby="lore-review-queue-title">
+            <h2 id="lore-review-queue-title">검토 대기</h2>
+            <ul id="lore-review-list"></ul>
+          </aside>
+          <article class="lore-review-detail" id="lore-review-detail" aria-label="선택한 수정안"></article>
+          <div class="lore-review-feedback" id="lore-review-feedback" hidden>
+            <p class="field-hint" id="lore-review-status" role="status"></p>
+            <button type="button" class="quiet-button" id="lore-review-undo" hidden>실행 취소</button>
           </div>
         </section>
         <dialog id="lore-delete-dialog" class="lore-delete-dialog" aria-labelledby="lore-delete-title" aria-describedby="lore-delete-message">
@@ -516,13 +544,13 @@
           </div>
           <input type="file" id="synopsis-file" accept=".txt,.md,.markdown" multiple hidden>
           <textarea class="writing-field" id="synopsis" rows="4" placeholder="이야기의 큰 흐름과 결말 계획을 적어 두세요."></textarea>
-          <p class="field-hint">줄거리 전문은 이어쓰기마다 전송돼요.</p>
+          <p class="field-hint">작품의 큰 흐름과 예정된 전환점이에요. 이어쓰기마다 전문을 보내요.</p>
           <p class="field-hint import-status" id="synopsis-status" role="status" hidden></p>
         </div>
         <section class="memory-controls" id="manuscript-memory" data-project-note="memory" hidden>
-          <p class="field-hint">원고의 사건, 인물 상태와 복선을 정리해 다음 이어쓰기에 사용해요.</p>
-          <label class="memory-auto"><input id="memory-auto" type="checkbox"> 원고에 추가할 때 자동 갱신</label>
-          <p class="field-hint">갱신할 원고는 OpenRouter를 통해 선택한 모델로 전송돼요.</p>
+          <p class="field-hint">최근 원문 앞부분의 사건, 인물 상태와 복선을 정리해 다음 이어쓰기에 사용해요.</p>
+          <label class="memory-auto"><input id="memory-auto" type="checkbox"> 장면 반영 후 필요한 메모 미리 갱신</label>
+          <p class="field-hint">이어쓰기 전에 최근 원문 앞에 빠진 부분을 확인하고, 원고 메모를 사용할 때만 해당 부분을 OpenRouter에 보내 갱신해요.</p>
           <p class="field-hint" id="memory-estimate"></p>
           <p class="field-hint" id="memory-usage"></p>
           <div class="memory-buttons">

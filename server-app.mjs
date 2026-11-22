@@ -7,16 +7,18 @@ import { gunzip } from 'node:zlib'
 import {
   assistantHistoryTurns, assistantMessageLimit, assistantNoteDraftLimit, assistantRepairTextLimit, assistantReplyLimit,
   completionPayload, continuationPayload, defaultLoreSystemPrompt, defaultMemoryPrompt, defaultNoteSystemPrompt, defaultRevisionPrompt, defaultSystemPrompt,
-  defaultReferences, effectiveSystemPrompt, freeModel, memoryExcerptLimit, memoryOutputLimit, modelIdPattern, validModelId,
+  defaultReferences, effectiveSystemPrompt, freeModel, memoryExcerptLimit, modelIdPattern, validModelId,
   noteDraftActions, noteKinds, orderedWritingContext, revisionParagraphLimit, sceneDraftLimit, sceneNeighborLimit, systemPromptLimit,
   validWritingTokenLimit, writingFields,
 } from './public/writing-config.mjs'
 import { actualUsage } from './public/request-tools.mjs'
+import { manuscriptMemoryPayload, memoryWithKnowledge, validKnowledge } from './public/memory-knowledge.mjs'
 import {
   generationOptionLabels, openRouterOptions, reasoningEfforts, validModelOptions, withoutGenerationOptions,
 } from './public/model-options.mjs'
-import { loreCardFields, validLoreCardFields } from './public/project-files.mjs'
+import { loreCardFields, validLoreCard, validLoreCardFields } from './public/project-files.mjs'
 import { chunkLimit, embeddingBatchSize, embeddingQueryLimit, loreKinds, loreLimits } from './public/retrieval.mjs'
+import { sceneReviewCardLimit, sceneReviewInputValid, sceneReviewPayload } from './public/scene-review.mjs'
 import { readWorkspace, workspaceInflatedBytes, workspaceRequestBytes } from './public/writing-workspace.mjs'
 
 const baseUrl = 'https://openrouter.ai/api/v1'
@@ -37,11 +39,18 @@ const assets = new Map([
   ['/writing-workspace.mjs', ['writing-workspace.mjs', 'text/javascript; charset=utf-8']],
   ['/workspace-storage.mjs', ['workspace-storage.mjs', 'text/javascript; charset=utf-8']],
   ['/manuscript-memory.mjs', ['manuscript-memory.mjs', 'text/javascript; charset=utf-8']],
+  ['/memory-knowledge.mjs', ['memory-knowledge.mjs', 'text/javascript; charset=utf-8']],
+  ['/numbered-passages.mjs', ['numbered-passages.mjs', 'text/javascript; charset=utf-8']],
   ['/manuscript-scenes.mjs', ['manuscript-scenes.mjs', 'text/javascript; charset=utf-8']],
+  ['/recent-manuscript.mjs', ['recent-manuscript.mjs', 'text/javascript; charset=utf-8']],
+  ['/scene-review.mjs', ['scene-review.mjs', 'text/javascript; charset=utf-8']],
+  ['/scene-review-jobs.mjs', ['scene-review-jobs.mjs', 'text/javascript; charset=utf-8']],
+  ['/plan-progress.mjs', ['plan-progress.mjs', 'text/javascript; charset=utf-8']],
   ['/retrieval.mjs', ['retrieval.mjs', 'text/javascript; charset=utf-8']],
   ['/embedding-index.mjs', ['embedding-index.mjs', 'text/javascript; charset=utf-8']],
   ['/research-panel.mjs', ['research-panel.mjs', 'text/javascript; charset=utf-8']],
   ['/lorebook-panel.mjs', ['lorebook-panel.mjs', 'text/javascript; charset=utf-8']],
+  ['/lore-review-panel.mjs', ['lore-review-panel.mjs', 'text/javascript; charset=utf-8']],
   ['/writing-context.mjs', ['writing-context.mjs', 'text/javascript; charset=utf-8']],
   ['/source-panel.mjs', ['source-panel.mjs', 'text/javascript; charset=utf-8']],
   ['/request-tools.mjs', ['request-tools.mjs', 'text/javascript; charset=utf-8']],
@@ -273,16 +282,26 @@ function assistantCompletion({ kind, mode, model, maxTokens, target, messages, c
   }
 }
 
-function memoryCompletion({ model, projectTitle, memory, excerpt, systemPrompt }) {
+function memoryCompletion({ model, projectTitle, memory, excerpt, systemPrompt, knowledge }) {
   if (typeof model !== 'string' || model.length > 200 || !modelIdPattern.test(model) ||
       typeof projectTitle !== 'string' || projectTitle.length > writingFields.projectTitle ||
       typeof memory !== 'string' || memory.length > writingFields.manuscriptMemory ||
-      typeof excerpt !== 'string' || !excerpt.trim() || excerpt.length > memoryExcerptLimit) {
+      typeof excerpt !== 'string' || !excerpt.trim() || excerpt.length > memoryExcerptLimit ||
+      (knowledge != null && (!validKnowledge(knowledge) ||
+        memoryWithKnowledge(memory, knowledge).length > writingFields.manuscriptMemory))) {
     throw new RequestError(400, '메모를 갱신할 원고 범위를 확인해 주세요.')
   }
 
-  return completionPayload(model, memoryOutputLimit, resolveSystemPrompt(systemPrompt, defaultMemoryPrompt),
-    { projectTitle, memory, excerpt })
+  return manuscriptMemoryPayload({
+    model, projectTitle, memory, excerpt, knowledge, systemPrompt: resolveSystemPrompt(systemPrompt, defaultMemoryPrompt),
+  })
+}
+
+function sceneReviewCompletion(input) {
+  const { model, cards } = input
+  if (!validModelId(model) || !sceneReviewInputValid(input) || !Array.isArray(cards) || cards.length > sceneReviewCardLimit ||
+      !cards.every(validLoreCard)) throw new RequestError(400, '검토할 장면과 작품 설정을 확인해 주세요.')
+  return sceneReviewPayload(input)
 }
 
 function revisionCompletion({ model, maxTokens, paragraph, direction, systemPrompt }) {
@@ -623,6 +642,8 @@ export function createTongjorimServer({ apiKey, managementKey, store, port, upst
         await streamCompletion(req, res, assistantCompletion, assistantRequestBytes, { assistant: true })
       } else if (req.method === 'POST' && path === '/api/memory') {
         await streamCompletion(req, res, memoryCompletion)
+      } else if (req.method === 'POST' && path === '/api/scene-review') {
+        await streamCompletion(req, res, sceneReviewCompletion, writingRequestBytes, { assistant: true })
       } else if (req.method === 'GET' && path === '/api/embeddings/models') {
         if (!apiKey) throw new RequestError(503, 'OpenRouter API 키를 설정해 주세요.')
         json(res, 200, { models: await embeddingModels() })

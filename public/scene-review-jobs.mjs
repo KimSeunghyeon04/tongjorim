@@ -1,0 +1,104 @@
+import { requestCompletion } from './completion.js'
+import { withModelOptions } from './model-options.mjs'
+import { canonicalMilestone, evidenceInScene, matchingLoreName, parseSceneReview, pendingLoreChanges, resolveSceneReview,
+  reviewedScene, sceneResolutionInput, sceneReviewInputValid, sceneReviewRequest } from './scene-review.mjs'
+
+export function setupSceneReviewJobs({ hasProject, saveWorkspace, onChange }) {
+  const jobs = new WeakMap()
+  const pendingReview = (project, attempted) => project.sceneReviews?.find(
+    review => review.pending && !attempted?.has(review) && reviewedScene(project, review),
+  )
+
+  function start(project, { retry = false } = {}) {
+    const previous = jobs.get(project)
+    if (previous?.controller || (previous?.error && !retry) || !pendingReview(project)) return
+    const controller = new AbortController()
+    const job = { controller, error: '' }
+    jobs.set(project, job)
+    onChange(project)
+    run()
+
+    async function run() {
+      const { signal } = controller
+      const attempted = new Set()
+      try {
+        let review
+        while (!signal.aborted && hasProject(project) && (review = pendingReview(project, attempted))) {
+          attempted.add(review)
+          try {
+            await analyze(project, review, signal)
+          } catch (error) {
+            if (!signal.aborted) job.error = error instanceof SyntaxError ? '장면 검토 응답의 형식이 올바르지 않아요.' : error.message
+          }
+          onChange(project)
+        }
+      } finally {
+        job.controller = null
+        onChange(project)
+      }
+    }
+  }
+
+  async function requestReview(project, input, signal) {
+    let response = ''
+    const result = await requestCompletion('/api/scene-review', withModelOptions(project, input), {
+      signal, projectId: project.id, onText(content) { response += content },
+    })
+    signal.throwIfAborted()
+    if (result.truncated) throw new Error('장면 검토 응답이 중간에 끝났어요.')
+    return response
+  }
+
+  async function analyze(project, review, signal) {
+    const source = reviewedScene(project, review)
+    const input = sceneReviewRequest(project, source)
+    if (!sceneReviewInputValid(input)) throw new Error('검토할 장면이 너무 길어요. 장면을 나눠 주세요.')
+    const extracted = parseSceneReview(await requestReview(project, input, signal), input)
+    if (!hasProject(project) || !project.sceneReviews?.includes(review)) return
+    if (reviewedScene(project, review)?.text !== source.text) throw new Error('검토하는 동안 원고가 바뀌었어요.')
+    const matchingInput = sceneReviewRequest(project, source)
+    const resolution = extracted.candidates.length || extracted.progress.length
+      ? await requestReview(project, { ...matchingInput, ...sceneResolutionInput(extracted) }, signal) : undefined
+    const { progress, lore: proposed } = resolveSceneReview(extracted, matchingInput, resolution)
+    let applied = false
+    const saved = await saveWorkspace(() => {
+      if (signal.aborted || !hasProject(project) || !project.sceneReviews?.includes(review)) return
+      if (reviewedScene(project, review)?.text !== source.text) return
+      const before = project.sceneReviews
+      const completed = new Set()
+      for (const entry of before) {
+        if (entry === review) continue
+        const original = reviewedScene(project, entry)
+        if (!original) continue
+        for (const item of entry.progress) {
+          if (evidenceInScene(original, item.evidence)) completed.add(canonicalMilestone(project.synopsis, item.milestone))
+        }
+      }
+      const freshProgress = progress.filter(item => {
+        const milestone = canonicalMilestone(project.synopsis, item.milestone)
+        if (!milestone || completed.has(milestone)) return false
+        completed.add(milestone)
+        return true
+      })
+      const alreadyProposed = pendingLoreChanges(project).map(item => item.proposal)
+      const lore = proposed.filter(proposal => {
+        if (!proposal.targetId && matchingLoreName(project, proposal.name)) return false
+        return !alreadyProposed.some(item => item.targetId === proposal.targetId &&
+          item.name === proposal.name && item.description === proposal.description)
+      })
+      const after = before.map(item => item === review ? { ...item, pending: false, progress: freshProgress, planChange: extracted.planChange, lore } : item)
+      project.sceneReviews = after
+      applied = true
+      return () => { if (project.sceneReviews === after) project.sceneReviews = before }
+    })
+    signal.throwIfAborted()
+    if (!saved) throw new Error('장면 검토 결과를 저장하지 못했어요.')
+    if (!applied && project.sceneReviews?.includes(review)) throw new Error('검토하는 동안 원고가 바뀌었거나 결과를 저장하지 못했어요.')
+  }
+
+  return {
+    start,
+    error: project => jobs.get(project)?.error ?? '',
+    stop: project => jobs.get(project)?.controller?.abort(),
+  }
+}

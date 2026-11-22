@@ -56,7 +56,7 @@ export function setupSourcePanel({ get, currentProject, getModel, research, save
   }
 
   function renderMetrics({ saved, draft }) {
-    const { contextLength, originalBudget, remaining, reserve, usage, recentReduced, pastReduced, outputTooLarge } = draft
+    const { contextLength, originalBudget, remaining, reserve, usage, recentReduced, recentWarning, pastReduced, outputTooLarge } = draft
     get('source-budget').textContent = originalBudget === null ? '확인 불가' : tokens(Math.max(0, originalBudget))
     const remainingText = get('source-remaining')
     remainingText.textContent = remaining === null ? '확인 불가' : remaining < 0 ? `${tokens(-remaining)} 부족` : tokens(remaining)
@@ -77,7 +77,8 @@ export function setupSourcePanel({ get, currentProject, getModel, research, save
       `모델 한도 ${tokens(contextLength)}에서 출력 ${tokens(usage.outputTokens)}과 여유분 ${tokens(reserve)}을 예약했어요. 입력은 추정치예요.`,
     ]
     if (remaining !== null && remaining < 0) notes.push('프롬프트나 메모 분량, 또는 출력 한도를 줄여 주세요.')
-    else if (recentReduced || pastReduced) notes.push('컨텍스트에 맞춰 원문을 줄였어요.')
+    if (recentWarning) notes.push(recentWarning)
+    else if (recentReduced || pastReduced) notes.push('한도에 맞춰 전송할 원문 범위를 조정했어요.')
     if (outputTooLarge) notes.push('선택한 출력 한도가 제공업체의 최대 출력보다 높아요.')
     context.textContent = notes.join(' ')
   }

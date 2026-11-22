@@ -17,6 +17,10 @@ export function sceneRangeAvailable(scenes, range, exceptId) {
     id !== exceptId && other && range.start < other.end && other.start < range.end)
 }
 
+export function savedScenesInManuscriptOrder(scenes = []) {
+  return scenes.toSorted((a, b) => (a.range?.start ?? Infinity) - (b.range?.start ?? Infinity))
+}
+
 // Prefer the browser's edit position when repeated prose admits multiple matching diffs.
 export function manuscriptEdit(before, after, selection) {
   if (before === after) return null

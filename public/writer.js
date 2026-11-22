@@ -2,17 +2,22 @@ import { freeModel, requestCompletion, settingsChangeEvent } from './completion.
 import { withModelOptions } from './model-options.mjs'
 import {
   appendParagraphs, completionPayload, defaultLoreSystemPrompt, defaultMemoryPrompt, defaultNoteSystemPrompt, defaultRevisionPrompt, defaultSystemPrompt,
-  effectiveSystemPrompt, memoryOutputLimit, modelFor, normalizeLineEndings, noteDraftActions, noteKinds,
+  effectiveSystemPrompt, modelFor, normalizeLineEndings, noteDraftActions, noteKinds,
   sceneDraftLimit, systemPromptLimit, writingFieldPrefix, writingFields,
 } from './writing-config.mjs'
 import { assistantMessageLimit, assistantNoteDraftLimit, assistantProjectContext, createWritingAssistant, projectNotesLimitHint } from './writing-assistant.mjs'
 import { memoryForPrompt, memoryReadThrough, memoryRequest, setManuscriptText, updateManuscriptMemory } from './manuscript-memory.mjs'
+import { manuscriptMemoryPayload } from './memory-knowledge.mjs'
 import { forgetSceneUndo, isSceneHistoryEdit, manuscriptEdit, reconcileSceneUndo, rememberUndoneComposition, sceneHistoryReplay, sceneRange, sceneRangeAvailable, sceneTitle, sceneVersions } from './manuscript-scenes.mjs'
 import { exportPack, exportProject, readPack, readProject, referenceSettingsFor } from './project-files.mjs'
 import { currentProjectOf, makeProject, mergeModelSettings, projectName, readWorkspace, workspaceMatchesSnapshot } from './writing-workspace.mjs'
 import { cacheWorkspace, openWorkspaceStorage, readCachedWorkspace, readLatestWorkspace, storageConflictMessage, storageKey, workspaceChangeEvent, workspaceStatusEvent, workspaceStorageStatus } from './workspace-storage.mjs'
 import { setupResearch } from './research-panel.mjs'
 import { setupLorebook } from './lorebook-panel.mjs'
+import { setupLoreReviews } from './lore-review-panel.mjs'
+import { setupPlanProgress } from './plan-progress.mjs'
+import { markSceneForReview } from './scene-review.mjs'
+import { setupSceneReviewJobs } from './scene-review-jobs.mjs'
 import { setupSourcePanel } from './source-panel.mjs'
 import { paragraphRanges } from './retrieval.mjs'
 import { combineUsage, completionEstimate, estimateLabel, jsonRequest, usageLabel } from './request-tools.mjs'
@@ -413,7 +418,9 @@ async function saveSceneRange(scene) {
     if (scene && !previous.some(item => item.id === scene.id && !item.range)) throw new Error('장면 위치가 바뀌었어요.')
     const updated = scene ? previous.map(item => item.id === scene.id ? savedScene : item) : [...(previous ?? []), savedScene]
     project.savedScenes = updated
+    const undoReview = markSceneForReview(project, savedScene)
     return () => {
+      undoReview()
       if (project.savedScenes !== updated) return
       if (previous) project.savedScenes = previous
       else delete project.savedScenes
@@ -423,6 +430,9 @@ async function saveSceneRange(scene) {
   if (saved) {
     selectedScenes.set(project, savedScene.id)
     forgetSceneUndo(sceneUndo, savedScene.id)
+    sceneReviewJobs.start(project, { retry: true })
+    refreshMemoryAfterScene(project)
+    writingInputsChanged()
   }
   sceneMessages.set(project, saved ? (scene ? '장면 위치를 확인했어요.' : '선택 범위를 장면으로 등록했어요.')
     : '장면을 저장하지 못했어요. 저장 상태를 확인해 주세요.')
@@ -482,9 +492,11 @@ function renderWorkspace() {
   renderPlanner()
   renderMemory()
   lorebook.render()
+  loreReviews.render()
   research.render()
   renderEstimates()
   renderSavedScenes()
+  sceneReviewJobs.start(project)
   renderContinuation()
   if (currentContinuation() && activeWorkspaceTab === manuscriptTab && !currentContinuation().showManuscript) {
     switchPanel('continuation')
@@ -597,7 +609,8 @@ function renderEstimates() {
   const limitNotes = []
   if (limitedFields.length) limitNotes.push(`요청 한도에 맞춰 ${limitedFields.join(', ')}의 앞부분을 보냅니다.`)
   if (saved.remaining < 0) limitNotes.push('모델 컨텍스트가 부족해요. 프롬프트, 참고 자료나 출력 한도를 줄여 주세요.')
-  else if (saved.recentReduced || saved.pastReduced) limitNotes.push('모델 컨텍스트에 맞춰 원문을 줄였어요.')
+  if (saved.recentWarning) limitNotes.push(saved.recentWarning)
+  else if (saved.recentReduced || saved.pastReduced) limitNotes.push('한도에 맞춰 전송할 원문 범위를 조정했어요.')
   limitNotice.hidden = !limitNotes.length
   limitNotice.textContent = limitNotes.join(' ')
 
@@ -612,9 +625,8 @@ function renderEstimates() {
   } else {
     get('revision-estimate').textContent = ''
   }
-  const { model, systemPrompt, ...memory } = memoryRequest(project)
-  get('memory-estimate').textContent = memory.excerpt.trim() ? estimate(completionPayload(model, memoryOutputLimit,
-    effectiveSystemPrompt(systemPrompt, defaultMemoryPrompt), memory)) + ' · 다음 메모 요청' : ''
+  const memory = memoryRequest(project, project.manuscript.slice(0, memoryTarget(project)))
+  get('memory-estimate').textContent = memory.excerpt.trim() ? estimate(manuscriptMemoryPayload(memory)) + ' · 다음 메모 요청' : ''
 }
 
 function closeRequestPreview() {
@@ -630,6 +642,8 @@ function writingInputsChanged() {
   activeRequest?.cancelPreparation?.()
   closeRequestPreview()
   lorebook.renderContext()
+  loreReviews.render()
+  if (activeWorkspaceTab === noteWorkspaceTab) planProgress.render()
   research.renderState()
   renderEstimates()
   syncControls()
@@ -672,6 +686,34 @@ const lorebook = setupLorebook({
   get, currentProject, saveWorkspace, onChange: writingInputsChanged,
   addedLoreCards: project => addedLoreCards.get(project), onSelectLoreCard: selectLoreCard,
 })
+const planProgress = setupPlanProgress({
+  get, currentProject, saveWorkspace, goToPassage,
+  onChange(project) {
+    if (project !== currentProject()) return
+    get('synopsis').value = project.synopsis
+    writingInputsChanged()
+    renderPlanContextLimit()
+    updatePlanControls()
+  },
+})
+const sceneReviewJobs = setupSceneReviewJobs({
+  hasProject: project => workspace.projects.includes(project), saveWorkspace,
+  onChange(project) {
+    if (project !== currentProject()) return
+    loreReviews.render()
+    if (activeWorkspaceTab === noteWorkspaceTab) planProgress.render()
+  },
+})
+const loreReviews = setupLoreReviews({
+  get, currentProject, saveWorkspace, goToPassage, jobError: sceneReviewJobs.error,
+  onOpen: () => setWorkspaceTab(loreWorkspaceTab),
+  onChange(project, cardsChanged) {
+    if (project !== currentProject() || !cardsChanged) return
+    lorebook.render()
+    writingInputsChanged()
+  },
+})
+get('retry-scene-review').addEventListener('click', () => sceneReviewJobs.start(currentProject(), { retry: true }))
 const catalogModel = id => models.find(model => model.id === id)
 const sourcePanel = setupSourcePanel({
   get, currentProject, getModel: catalogModel, research, saveWorkspace, onSave: writingInputsChanged,
@@ -726,9 +768,10 @@ async function showRequestPreview({ refreshSemantic = false, origin, loreFocus }
     get('request-preview-estimate').textContent = value
     get('writing-estimate').textContent = value + (prepared.semanticPending ? ' · 의미 검색 반영 전' : '')
     get('request-json').textContent = JSON.stringify(payload, null, 2)
-    status.textContent = prepared.remaining < 0
+    status.textContent = prepared.recentWarning || (prepared.remaining < 0
       ? '이 자료를 모두 보내기에는 모델 컨텍스트가 부족해요. 카드 선택이나 출력 한도를 줄여 주세요.'
-      : ''
+      : prepared.body.references.includes('manuscriptMemory') && memoryReadThrough(project) < prepared.cutoff
+        ? '이어쓰기 전에 최근 원문 앞의 미요약 부분을 원고 메모에 반영해요.' : '')
     semanticAction.hidden = !(prepared.semanticPending || prepared.semanticFailed)
     data.hidden = false
   } catch (error) {
@@ -761,12 +804,28 @@ async function continueManuscript() {
 
   try {
     await verifyWorkspaceForRequest()
-    const assertCurrent = watchWritingPreparation(request, project, original, original.length, { useCurrentNote: true })
-    assertCurrent()
+    const checkInputs = watchWritingPreparation(request, project, original, original.length, { useCurrentNote: true, trackMemory: false })
+    checkInputs()
     const oneTimeNote = project.authorMode === 'once' ? project.direction : undefined
-    const { body, remaining } = await research.prepare(project, catalogModel(project.model), signal, { assertCurrent })
-    await verifyWorkspaceForRequest()
-    assertCurrent()
+    const model = catalogModel(project.model)
+    let prepared
+    while (!prepared) {
+      const plan = research.plan(project, model)
+      if (plan.recentWarning) throw new Error(plan.recentWarning)
+      if (plan.finish().remaining < 0) throw new Error('모델 컨텍스트가 부족해요. 프롬프트, 참고 자료나 출력 한도를 줄여 주세요.')
+      if (plan.body.references.includes('manuscriptMemory') && memoryReadThrough(project) < plan.cutoff) {
+        writingStatus.textContent = '최근 원문 앞부분을 원고 메모에 정리하는 중이에요.'
+        const error = await refreshProjectMemory(project, plan.cutoff, signal)
+        checkInputs()
+        if (error) throw new Error(error)
+        continue
+      }
+      const assertCurrent = watchWritingPreparation(request, project, original, original.length, { useCurrentNote: true })
+      prepared = await research.prepare(project, model, signal, { assertCurrent })
+      await verifyWorkspaceForRequest()
+      assertCurrent()
+    }
+    const { body, remaining } = prepared
     if (remaining < 0) throw new Error('모델 컨텍스트가 부족해요. 프롬프트, 참고 자료나 출력 한도를 줄여 주세요.')
     delete request.cancelPreparation
 
@@ -919,7 +978,7 @@ function showContinuationVersion(index) {
   syncControls()
 }
 
-function watchWritingPreparation(request, project, original, start, { useCurrentNote = false } = {}) {
+function watchWritingPreparation(request, project, original, start, { useCurrentNote = false, trackMemory = true } = {}) {
   const { controller } = request
   const stale = new DOMException(writingContextChanged, 'AbortError')
   const inputVersion = () => {
@@ -927,11 +986,11 @@ function watchWritingPreparation(request, project, original, start, { useCurrent
     const enabled = new Set(settings.filter(ref => ref.enabled).map(ref => ref.key))
     return JSON.stringify([
       settings, project.model, project.maxTokens, project.modelOptions, project.systemPrompt,
-      project.title, project.synopsis, project.sourceLimits,
+      project.title, project.synopsis, project.sourceLimits, project.savedScenes?.map(scene => scene.range),
       useCurrentNote ? [project.direction, project.sceneLength, project.authorMode] : undefined,
       enabled.has('pastPassages') ? project.search : undefined,
       enabled.has('lorebook') ? [project.lorebook, [...(addedLoreCards.get(project) ?? [])]] : undefined,
-      enabled.has('manuscriptMemory') && memoryReadThrough(project) <= start ? project.manuscriptMemory : undefined,
+      trackMemory && enabled.has('manuscriptMemory') && memoryReadThrough(project) <= start ? project.manuscriptMemory : undefined,
     ])
   }
   const originalSettings = inputVersion()
@@ -1046,8 +1105,10 @@ async function acceptContinuation() {
     const moved = project.savedScenes ?? []
     const updatedScenes = scene ? moved.map(item => item.id === scene.id ? savedScene : item) : [...moved, savedScene]
     project.savedScenes = updatedScenes
+    const undoReview = markSceneForReview(project, savedScene)
     if (clearNote) project.direction = ''
     return () => {
+      undoReview()
       if (project.manuscript === updated && project.savedScenes === updatedScenes) {
         const restoreMemory = project.manuscriptMemory === updatedMemory
         setManuscriptText(project, original)
@@ -1080,7 +1141,8 @@ async function acceptContinuation() {
     showContinuationStart()
     if (activeWorkspaceTab === manuscriptTab) manuscript.focus({ preventScroll: true })
   }
-  if (project.autoMemory) refreshProjectMemory(project)
+  refreshMemoryAfterScene(project)
+  sceneReviewJobs.start(project, { retry: true })
   writingStatus.textContent = scene ? `버전 ${selected + 1}의 초안을 장면에 반영했어요.`
     : `버전 ${selected + 1}의 초안을 원고에 붙였어요.`
 }
@@ -1145,16 +1207,27 @@ function completionFailure(error, signal) {
   return error.message
 }
 
+function memoryTarget(project) {
+  const plan = research.plan(project, catalogModel(project.model))
+  return plan.recentWarning ? 0 : plan.cutoff
+}
+
+function refreshMemoryAfterScene(project) {
+  if (project.autoMemory !== false &&
+      referenceSettingsFor(project).some(ref => ref.key === 'manuscriptMemory' && ref.enabled)) refreshProjectMemory(project)
+}
+
 function renderMemory() {
   const project = currentProject()
   const job = memoryJobs.get(project)
   const through = memoryReadThrough(project)
-  const remaining = project.manuscript.length - through
+  const target = memoryTarget(project)
+  const remaining = Math.max(0, target - through)
   const running = Boolean(job?.controller)
   const hasManuscript = Boolean(project.manuscript.trim())
   const text = memoryForPrompt(project)
 
-  memoryAuto.checked = Boolean(project.autoMemory)
+  memoryAuto.checked = project.autoMemory !== false
   memoryRefresh.disabled = running || !hasManuscript || remaining === 0
   memoryStop.hidden = !running
   get('memory-content').hidden = !text
@@ -1163,47 +1236,71 @@ function renderMemory() {
 
   const message = running ? `${formatNumber.format(through)}자까지 읽었어요. 원고를 읽고 있어요.`
     : job?.error || (!hasManuscript ? '원고가 준비되면 메모를 갱신할 수 있어요.'
-      : project.manuscriptMemory?.stale ? '이미 읽은 부분이 바뀌었어요. 처음부터 다시 읽으려면 갱신하기를 누르세요.'
+      : remaining && project.manuscriptMemory?.stale ? '이미 읽은 원고가 바뀌었어요. 갱신하면 최근 원문 앞부분을 다시 읽어요.'
       : remaining ? `아직 메모에 반영할 원고가 ${formatNumber.format(remaining)}자 남았어요.`
-      : '현재 원고까지 갱신했어요.')
+      : target ? '최근 원문이 시작되기 전까지 반영했어요.' : '최근 원문 앞에 요약할 부분이 없어요.')
   if (memoryStatus.textContent !== message) memoryStatus.textContent = message
 }
 
-async function refreshProjectMemory(project) {
+async function refreshProjectMemory(project, target = memoryTarget(project), parentSignal) {
+  const requested = project.manuscript.slice(0, target)
+  if (memoryReadThrough(project) >= requested.length) return ''
+  parentSignal?.throwIfAborted()
   const pending = memoryJobs.get(project)
   if (pending?.controller) {
-    pending.requestedManuscript = project.manuscript
-    return
+    if (!pending.requestedManuscript.startsWith(requested)) pending.requestedManuscript = requested
+    if (!parentSignal) return pending.task
+    const stopWaiting = () => pending.controller?.abort(parentSignal.reason)
+    parentSignal.addEventListener('abort', stopWaiting, { once: true })
+    try { return await pending.task } finally { parentSignal.removeEventListener('abort', stopWaiting) }
   }
-  if (!project.manuscript.trim() || memoryReadThrough(project) === project.manuscript.length) return
 
   const controller = new AbortController()
-  const job = { controller, error: '', requestedManuscript: project.manuscript }
+  const signal = parentSignal ? AbortSignal.any([parentSignal, controller.signal]) : controller.signal
+  const job = { controller, error: '', requestedManuscript: requested }
   memoryJobs.set(project, job)
   const refreshVisible = () => { if (project === currentProject()) renderMemory() }
   refreshVisible()
 
-  try {
-    let snapshot
-    do {
-      snapshot = job.requestedManuscript
-      await updateManuscriptMemory(project, snapshot, controller.signal, async () => {
-        if (!await saveWorkspace()) throw new Error('메모를 브라우저에 저장할 수 없어 갱신을 멈췄어요.')
-        refreshVisible()
-        if (project === currentProject()) writingInputsChanged()
-      }, usage => {
-        job.usage = combineUsage(job.usage, usage)
-        refreshVisible()
-      })
-    } while (snapshot !== job.requestedManuscript)
-  } catch (error) {
-    job.error = controller.signal.aborted ? '메모 갱신을 중지했어요.' : completionFailure(error, controller.signal)
-  } finally {
-    job.controller = null
-    refreshVisible()
-    if (project === currentProject() && projectNoteDialog.open && !memoryPanel.hidden &&
-        document.activeElement === document.body) memoryStatus.focus()
-  }
+  job.task = (async () => {
+    try {
+      let snapshot
+      do {
+        snapshot = job.requestedManuscript
+        await updateManuscriptMemory(project, snapshot, signal, async checkpoint => {
+          let applied = false
+          const saved = await saveWorkspace(() => {
+            signal.throwIfAborted()
+            if (!workspace.projects.includes(project) ||
+                project.manuscript.slice(0, checkpoint.through) !== snapshot.slice(0, checkpoint.through)) return
+            const previous = project.manuscriptMemory
+            project.manuscriptMemory = checkpoint
+            applied = true
+            return () => {
+              if (project.manuscriptMemory === checkpoint) project.manuscriptMemory = previous
+            }
+          })
+          signal.throwIfAborted()
+          if (!saved) throw new Error('메모를 브라우저에 저장할 수 없어 갱신을 멈췄어요.')
+          if (!applied) throw new Error('메모를 갱신하는 동안 원고가 바뀌었어요.')
+          refreshVisible()
+          if (project === currentProject()) writingInputsChanged()
+        }, usage => {
+          job.usage = combineUsage(job.usage, usage)
+          refreshVisible()
+        })
+      } while (snapshot !== job.requestedManuscript)
+    } catch (error) {
+      job.error = signal.aborted ? '메모 갱신을 중지했어요.' : completionFailure(error, signal)
+    } finally {
+      job.controller = null
+      refreshVisible()
+      if (project === currentProject() && projectNoteDialog.open && !memoryPanel.hidden &&
+          document.activeElement === document.body) memoryStatus.focus()
+    }
+    return job.error
+  })()
+  return job.task
 }
 
 function currentPlanEntry() {
@@ -1234,7 +1331,10 @@ function setWorkspaceTab(activeTab) {
   else switchPanel(activeTab === loreWorkspaceTab ? 'lore' : undefined)
   syncControls()
   if (activeTab === manuscriptTab) showContinuationStart()
-  if (activeTab === noteWorkspaceTab) planAssistant.restoreScroll()
+  if (activeTab === noteWorkspaceTab) {
+    planProgress.render()
+    planAssistant.restoreScroll()
+  }
   if (activeTab === loreWorkspaceTab) lorebook.restoreScroll()
 }
 
@@ -1247,6 +1347,7 @@ function renderPlanner() {
   renderSidebarContext()
   renderPlanContextLimit()
   renderPlanDraft()
+  planProgress.render()
   updatePlanControls()
 }
 
@@ -1991,6 +2092,7 @@ get('delete-project-form').addEventListener('submit', async event => {
   }
 
   memoryJobs.get(project)?.controller?.abort()
+  sceneReviewJobs.stop(project)
   continuations.delete(project)
   deleteProjectDialog.close()
   renderWorkspace()
