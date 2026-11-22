@@ -150,88 +150,116 @@
         </form>
       </section>
       <section class="lore-workspace" id="lore-workspace" role="tabpanel" aria-labelledby="lore-workspace-tab" hidden>
-        <div class="lore-workspace-toolbar">
-          <div class="lore-card-picker">
-            <label for="lore-card-select">카드 선택</label>
-            <select class="writing-field" id="lore-card-select"></select>
-            <button type="button" id="lore-new-card" class="outline-button">새 카드</button>
-          </div>
-          <div class="lore-list-feedback" id="lore-list-feedback" hidden>
-            <p class="field-hint" id="lore-list-status" role="status"></p>
-            <button type="button" id="lore-undo-delete" class="quiet-button" hidden>삭제 실행 취소</button>
-          </div>
-        </div>
-        <div class="lore-workspace-columns">
-          <section class="lore-card-editor" aria-labelledby="lore-editor-title">
-            <h2 id="lore-editor-title">새 카드</h2>
-            <form class="lore-card-form" id="lore-form">
-              <div class="lore-card-identity">
-                <div class="writing-input">
-                  <label for="lore-name">카드 이름</label>
-                  <input class="writing-field" id="lore-name" required maxlength="100">
-                </div>
-                <div class="writing-input">
-                  <label for="lore-kind">분류</label>
-                  <select id="lore-kind" class="writing-field"></select>
-                </div>
-              </div>
-              <div class="writing-input">
-                <label for="lore-aliases">별칭</label>
-                <input class="writing-field" id="lore-aliases" maxlength="1620" placeholder="쉼표로 구분">
-              </div>
-              <div class="writing-input">
-                <label for="lore-description">설명</label>
-                <textarea class="writing-field" id="lore-description" rows="10" required maxlength="1800"></textarea>
-              </div>
-              <div class="lore-card-options">
-                <div class="writing-input">
-                  <label for="lore-priority">우선순위</label>
-                  <input class="writing-field" id="lore-priority" type="number" min="-100" max="100" value="0" required>
-                </div>
-                <label class="memory-auto"><input id="lore-always" type="checkbox"> 항상 포함</label>
-              </div>
-              <p class="field-hint" id="lore-form-status" role="status"></p>
-              <div class="compact-actions lore-card-actions">
-                <button type="submit" id="save-lore" class="writing-primary">카드 추가</button>
-                <button type="button" id="lore-cancel" class="quiet-button" hidden>편집 취소</button>
-                <button type="button" id="lore-delete-card" class="quiet-button" hidden>카드 삭제</button>
-              </div>
-            </form>
-          </section>
-          <section class="lore-discussion" aria-labelledby="lore-assistant-title">
-            <div class="field-heading lore-discussion-header">
-              <h2 id="lore-assistant-title">AI와 대화</h2>
-              <button type="button" class="quiet-button" id="edit-lore-prompt" aria-haspopup="dialog" aria-controls="prompt-dialog">프롬프트 편집</button>
+        <section class="lore-screen" id="lore-library" aria-labelledby="lore-library-title">
+          <header class="lore-workspace-toolbar">
+            <div class="lore-toolbar-row">
+              <h2 id="lore-library-title">카드 목록</h2>
+              <button type="button" id="lore-new-card" class="writing-primary">새 카드</button>
             </div>
-            <div class="note-conversation lore-conversation" id="lore-conversation" role="region" aria-label="대화와 카드 초안">
-              <p class="note-empty" id="lore-conversation-empty">카드에 담을 설정이나 바꾸고 싶은 점을 이야기해 보세요.</p>
-              <ol class="assistant-transcript" id="lore-assistant-transcript" aria-label="카드 대화" hidden></ol>
-              <section class="note-draft" id="lore-card-draft" aria-labelledby="lore-draft-title" hidden>
-                <h3 id="lore-draft-title">카드 초안</h3>
-                <dl class="lore-draft-fields" id="lore-draft-fields"></dl>
-                <div class="compact-actions">
-                  <button type="button" id="lore-draft-apply" class="outline-button">편집란에 반영</button>
-                  <button type="button" id="lore-draft-discard" class="quiet-button">초안 버리기</button>
-                </div>
-              </section>
+            <div class="lore-list-filters">
+              <label class="visually-hidden" for="lore-search">카드 검색</label>
+              <input type="search" class="writing-field" id="lore-search" placeholder="이름 또는 별칭 검색" autocomplete="off">
+              <label class="visually-hidden" for="lore-filter">카드 분류 필터</label>
+              <select class="writing-field" id="lore-filter">
+                <option value="">모든 분류</option>
+              </select>
             </div>
-            <form class="note-composer" id="lore-assistant-form">
-              <p class="field-hint assistant-status" id="lore-assistant-status" role="status"></p>
-              <p class="field-hint" id="lore-notes-limit" hidden></p>
-              <div class="writing-input">
-                <label for="lore-assistant-prompt">AI에게 요청</label>
-                <textarea class="writing-field" id="lore-assistant-prompt" rows="2" aria-describedby="lore-context lore-notes-limit"></textarea>
+            <div class="lore-list-feedback" id="lore-list-feedback" hidden>
+              <p class="field-hint" id="lore-list-status" role="status"></p>
+              <button type="button" id="lore-undo-delete" class="quiet-button" hidden>삭제 실행 취소</button>
+            </div>
+            <button type="button" id="lore-return-card" class="quiet-button lore-return-card" hidden></button>
+          </header>
+          <div class="lore-library-scroll" id="lore-library-scroll">
+            <div id="lore-card-list"></div>
+            <p class="field-hint" id="lore-list-empty" role="status" hidden></p>
+          </div>
+        </section>
+        <section class="lore-screen" id="lore-editor" aria-labelledby="lore-editor-title" hidden>
+          <header class="lore-workspace-toolbar">
+            <div class="lore-toolbar-row">
+              <div class="lore-editor-heading">
+                <button type="button" id="lore-back" class="quiet-button">
+                  <span class="lore-back-icon" aria-hidden="true"></span>카드 목록
+                </button>
+                <h2 id="lore-editor-title" tabindex="-1">새 카드</h2>
               </div>
-              <div class="compact-actions lore-discussion-actions">
-                <button type="submit" id="lore-send" class="writing-primary" disabled>보내기</button>
-                <button type="button" id="lore-draft-start" class="outline-button">카드 초안 만들기</button>
-                <button type="button" id="lore-assistant-stop" class="quiet-button" hidden>응답 중지</button>
-                <button type="button" id="lore-assistant-reset" class="quiet-button" hidden>새 대화</button>
+              <div class="compact-actions">
+                <button type="button" id="lore-discussion-toggle" class="outline-button" aria-controls="lore-discussion" aria-expanded="false">AI와 대화</button>
+                <button type="submit" id="save-lore" class="writing-primary" form="lore-form">카드 추가</button>
               </div>
-              <p class="field-hint" id="lore-context">현재 카드와 줄거리, 관련 로어북 카드, 대화와 초안을 OpenRouter에 보내요.</p>
-            </form>
-          </section>
-        </div>
+            </div>
+            <p class="field-hint" id="lore-form-status" role="status"></p>
+          </header>
+          <div class="lore-workspace-columns" id="lore-editor-columns">
+            <div class="lore-card-editor">
+              <form class="lore-card-form" id="lore-form">
+                <div class="lore-card-identity">
+                  <div class="writing-input">
+                    <label for="lore-name">카드 이름</label>
+                    <input class="writing-field" id="lore-name" required maxlength="100">
+                  </div>
+                  <div class="writing-input">
+                    <label for="lore-kind">분류</label>
+                    <select id="lore-kind" class="writing-field"></select>
+                  </div>
+                </div>
+                <div class="writing-input">
+                  <label for="lore-description">설명</label>
+                  <textarea class="writing-field" id="lore-description" rows="10" required maxlength="1800"></textarea>
+                </div>
+                <div class="writing-input">
+                  <label for="lore-aliases">별칭</label>
+                  <input class="writing-field" id="lore-aliases" maxlength="1620" placeholder="쉼표로 구분">
+                </div>
+                <div class="lore-card-options">
+                  <div class="writing-input">
+                    <label for="lore-priority">우선순위</label>
+                    <input class="writing-field" id="lore-priority" type="number" min="-100" max="100" value="0" required>
+                  </div>
+                  <label class="memory-auto"><input id="lore-always" type="checkbox"> 항상 포함</label>
+                </div>
+                <div class="compact-actions lore-card-actions">
+                  <button type="button" id="lore-cancel" class="quiet-button" hidden>편집 취소</button>
+                  <button type="button" id="lore-delete-card" class="quiet-button" hidden>카드 삭제</button>
+                </div>
+              </form>
+            </div>
+            <section class="lore-discussion" id="lore-discussion" aria-labelledby="lore-assistant-title" hidden>
+              <div class="field-heading lore-discussion-header">
+                <h2 id="lore-assistant-title">AI와 대화</h2>
+                <button type="button" class="quiet-button" id="edit-lore-prompt" aria-haspopup="dialog" aria-controls="prompt-dialog">프롬프트 편집</button>
+              </div>
+              <div class="note-conversation lore-conversation" id="lore-conversation" role="region" aria-label="대화와 카드 초안">
+                <p class="note-empty" id="lore-conversation-empty">카드에 담을 설정이나 바꾸고 싶은 점을 이야기해 보세요.</p>
+                <ol class="assistant-transcript" id="lore-assistant-transcript" aria-label="카드 대화" hidden></ol>
+                <section class="note-draft" id="lore-card-draft" aria-labelledby="lore-draft-title" hidden>
+                  <h3 id="lore-draft-title">카드 초안</h3>
+                  <dl class="lore-draft-fields" id="lore-draft-fields"></dl>
+                  <div class="compact-actions">
+                    <button type="button" id="lore-draft-apply" class="outline-button">편집란에 반영</button>
+                    <button type="button" id="lore-draft-discard" class="quiet-button">초안 버리기</button>
+                  </div>
+                </section>
+              </div>
+              <form class="note-composer" id="lore-assistant-form">
+                <p class="field-hint assistant-status" id="lore-assistant-status" role="status"></p>
+                <p class="field-hint" id="lore-notes-limit" hidden></p>
+                <div class="writing-input">
+                  <label for="lore-assistant-prompt">AI에게 요청</label>
+                  <textarea class="writing-field" id="lore-assistant-prompt" rows="2" aria-describedby="lore-context lore-notes-limit"></textarea>
+                </div>
+                <div class="compact-actions lore-discussion-actions">
+                  <button type="submit" id="lore-send" class="writing-primary" disabled>보내기</button>
+                  <button type="button" id="lore-draft-start" class="outline-button">카드 초안 만들기</button>
+                  <button type="button" id="lore-assistant-stop" class="quiet-button" hidden>응답 중지</button>
+                  <button type="button" id="lore-assistant-reset" class="quiet-button" hidden>새 대화</button>
+                </div>
+                <p class="field-hint" id="lore-context">현재 카드와 줄거리, 관련 로어북 카드, 대화와 초안을 OpenRouter에 보내요.</p>
+              </form>
+            </section>
+          </div>
+        </section>
         <dialog id="lore-delete-dialog" class="lore-delete-dialog" aria-labelledby="lore-delete-title" aria-describedby="lore-delete-message">
           <h2 id="lore-delete-title">로어북 카드 삭제</h2>
           <p id="lore-delete-message"></p>

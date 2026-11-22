@@ -5,6 +5,7 @@ import { modelFor } from './writing-config.mjs'
 
 const nameOrder = new Intl.Collator('ko', { numeric: true })
 const element = (tag, text) => Object.assign(document.createElement(tag), { textContent: text })
+const searchText = text => text.normalize('NFKC').toLowerCase().trim()
 
 function groupedCards(cards = []) {
   const groups = new Map(Object.keys(loreKinds).map(kind => [kind, []]))
@@ -13,14 +14,51 @@ function groupedCards(cards = []) {
   return groups
 }
 
+function cardGroup(kind, cards, closed, renderRow) {
+  const group = element('details', '')
+  group.className = 'lore-group'
+  group.open = !closed.has(kind)
+  function rememberDisclosure() {
+    if (group.open) closed.delete(kind)
+    else closed.add(kind)
+  }
+  group.addEventListener('toggle', () => {
+    if (group.isConnected) rememberDisclosure()
+  })
+  const summary = element('summary', loreKinds[kind])
+  summary.addEventListener('click', event => {
+    event.preventDefault()
+    group.open = !group.open
+    rememberDisclosure()
+  })
+  const count = element('span', ` ${cards.length}`)
+  count.className = 'lore-group-count'
+  summary.append(count)
+  const list = element('ul', '')
+  for (const card of cards) list.append(renderRow(card))
+  group.append(summary, list)
+  return group
+}
+
 export function setupLorebook({ get, currentProject, saveWorkspace, onChange, addedLoreCards, onSelectLoreCard }) {
   const sessions = new WeakMap()
   const workspace = get('lore-workspace')
-  const picker = get('lore-card-select')
+  const library = get('lore-library')
+  const listScroll = get('lore-library-scroll')
+  const search = get('lore-search')
+  const filter = get('lore-filter')
+  const returnCard = get('lore-return-card')
+  const editor = get('lore-editor')
+  const editorTitle = get('lore-editor-title')
+  const back = get('lore-back')
+  const save = get('save-lore')
   const form = get('lore-form')
+  const editorScroll = form.parentElement
   const formStatus = get('lore-form-status')
   const alwaysField = get('lore-always')
   const cardInputs = [...form.querySelectorAll('input, select, textarea')]
+  const discussion = get('lore-discussion')
+  const discussionToggle = get('lore-discussion-toggle')
   const assistantForm = get('lore-assistant-form')
   const prompt = get('lore-assistant-prompt')
   const transcript = get('lore-assistant-transcript')
@@ -42,8 +80,11 @@ export function setupLorebook({ get, currentProject, saveWorkspace, onChange, ad
 
   function sessionFor(project = currentProject()) {
     if (!sessions.has(project)) {
-      const first = [...groupedCards(project.lorebook).values()].find(group => group.length)?.[0]
-      sessions.set(project, { cards: project.lorebook, entries: new Map(), selectedId: first?.id, deletions: [], status: '' })
+      sessions.set(project, {
+        cards: project.lorebook, entries: new Map(), selectedId: undefined, editorOpen: false, deletions: [], status: '',
+        list: { query: '', kind: '', scrollTop: 0, closed: new Set(), searchClosed: new Set() },
+        quickClosed: new Set(),
+      })
     }
     return sessions.get(project)
   }
@@ -69,29 +110,52 @@ export function setupLorebook({ get, currentProject, saveWorkspace, onChange, ad
   }
 
   function syncEditorLabels(card) {
-    get('lore-editor-title').textContent = card ? card.name : '새 카드'
-    get('save-lore').textContent = card ? '변경 저장' : '카드 추가'
+    editorTitle.textContent = card ? card.name : '새 카드'
+    save.textContent = card ? '변경 저장' : '카드 추가'
     get('lore-draft-start').textContent = card ? '수정안 만들기' : '카드 초안 만들기'
     get('lore-draft-title').textContent = card ? '카드 수정안' : '카드 초안'
     get('lore-cancel').hidden = !card
     get('lore-delete-card').hidden = !card
-    get('lore-new-card').hidden = !card
     prompt.placeholder = card ? '이 카드에서 바꾸고 싶은 점을 이야기해 보세요.' : '만들고 싶은 인물이나 설정을 이야기해 보세요.'
+  }
+
+  function syncEditorButtons() {
+    const saving = Boolean(editing?.saving)
+    save.disabled = saving
+    back.disabled = saving
+    get('lore-cancel').disabled = saving
+    get('lore-delete-card').disabled = saving
+  }
+
+  function renderDiscussion() {
+    const open = Boolean(editing.discussionOpen)
+    discussion.hidden = !open
+    discussionToggle.setAttribute('aria-expanded', String(open))
+    get('lore-editor-columns').classList.toggle('has-discussion', open)
+  }
+
+  function describeEdit() {
+    const card = sessionFor().cards?.find(item => item.id === editing.cardId)
+    const changed = !card || JSON.stringify(loreCardFields(readFields())) !== JSON.stringify(loreCardFields(card))
+    formStatus.textContent = changed ? '저장되지 않은 변경' : ''
   }
 
   function selectEditor(cardId) {
     const session = sessionFor()
     if (!session.entries.has(cardId)) session.entries.set(cardId, { cardId, draft: null })
     const next = session.entries.get(cardId)
-    if (editing === next) return
+    const card = session.cards?.find(item => item.id === cardId)
+    if (editing === next) {
+      syncEditorLabels(card)
+      syncEditorButtons()
+      return
+    }
     if (editing) {
       editing.values = cardInputs.map(input => input.type === 'checkbox' ? input.checked : input.value)
       editing.prompt = prompt.value
       editing.status = formStatus.textContent
     }
-    session.selectedId = cardId
     editing = next
-    const card = (session.cards ?? []).find(item => item.id === cardId)
     form.reset()
     if (card) writeFields(card)
     next.values?.forEach((value, index) => {
@@ -99,10 +163,10 @@ export function setupLorebook({ get, currentProject, saveWorkspace, onChange, ad
       if (input.type === 'checkbox') input.checked = value
       else input.value = value
     })
-    picker.value = cardId ?? ''
     prompt.value = next.prompt ?? ''
     formStatus.textContent = next.status ?? ''
     syncEditorLabels(card)
+    syncEditorButtons()
     assistant.useConversation(next)
     renderDraft()
   }
@@ -149,27 +213,103 @@ export function setupLorebook({ get, currentProject, saveWorkspace, onChange, ad
     if (entry !== editing) return
     if (sent) prompt.value = ''
     syncAssistant()
-    if (document.activeElement === document.body && !workspace.hidden) prompt.focus()
+    if (document.activeElement === document.body && !workspace.hidden && !editor.hidden && !discussion.hidden) prompt.focus()
   }
 
-  function renderPicker() {
-    const session = sessionFor()
-    const options = document.createDocumentFragment()
-    options.append(new Option('새 카드 초안', ''))
-    for (const [kind, cards] of groupedCards(session.cards)) {
-      if (!cards.length) continue
-      const group = document.createElement('optgroup')
-      group.label = loreKinds[kind]
-      for (const card of cards) group.append(new Option(card.name, card.id))
-      options.append(group)
+  function renderLibrary() {
+    const { cards = [], list } = sessionFor()
+    if (search.value !== list.query) search.value = list.query
+    filter.value = list.kind
+    const query = searchText(list.query)
+    const matches = cards.filter(card => (!list.kind || card.kind === list.kind) &&
+      (!query || [card.name, ...card.aliases].some(text => searchText(text).includes(query))))
+    const buttons = new Map()
+    const groups = document.createDocumentFragment()
+    const closed = query ? list.searchClosed : list.closed
+    for (const [kind, entries] of groupedCards(matches)) {
+      if (!entries.length) continue
+      groups.append(cardGroup(kind, entries, closed, card => {
+        const row = element('li', '')
+        const button = element('button', '')
+        button.type = 'button'
+        button.className = 'lore-card-open'
+        const name = element('strong', card.name)
+        name.className = 'lore-card-name'
+        button.append(name)
+        if (card.always) {
+          const pin = element('span', '항상 포함')
+          pin.className = 'lore-card-pin'
+          button.append(pin)
+        }
+        const excerpt = element('span', card.description.trim().split(/\r\n?|\n/, 1)[0])
+        excerpt.className = 'lore-card-excerpt'
+        button.append(excerpt)
+        button.addEventListener('click', () => openEditor(card.id))
+        row.append(button)
+        buttons.set(card.id, button)
+        return row
+      }))
     }
-    picker.replaceChildren(options)
-    picker.value = session.selectedId ?? ''
-    picker.disabled = !session.cards?.length
+    get('lore-card-list').replaceChildren(groups)
+    const empty = get('lore-list-empty')
+    empty.hidden = Boolean(matches.length)
+    if (!matches.length) empty.textContent = cards.length ? '조건에 맞는 카드가 없어요.' : '아직 카드가 없어요. 새 카드를 추가해 보세요.'
+    const row = buttons.get(list.returnId)
+    const visibleRow = row?.closest('details').open ? row : undefined
+    const recent = !visibleRow && cards.find(card => card.id === list.returnId)
+    returnCard.hidden = !recent
+    if (recent) returnCard.textContent = `편집한 카드 다시 열기 · ${recent.name}`
+    return visibleRow ?? (recent ? returnCard : undefined)
+  }
+
+  function showScreen(session) {
+    library.hidden = session.editorOpen
+    editor.hidden = !session.editorOpen
+  }
+
+  function rememberScroll() {
+    const session = sessionFor()
+    if (session.editorOpen) {
+      if (editorScroll.clientHeight) editing.scrollTop = editorScroll.scrollTop
+      assistant.rememberScroll()
+    } else if (listScroll.clientHeight) session.list.scrollTop = listScroll.scrollTop
+  }
+
+  function restoreScroll() {
+    const session = sessionFor()
+    if (session.editorOpen) {
+      editorScroll.scrollTop = editing.scrollTop ?? 0
+      assistant.restoreScroll()
+    } else listScroll.scrollTop = session.list.scrollTop
+  }
+
+  function openEditor(cardId) {
+    const session = sessionFor()
+    rememberScroll()
+    session.selectedId = cardId
+    session.editorOpen = true
+    showScreen(session)
+    selectEditor(cardId)
+    renderDiscussion()
+    restoreScroll()
+    const focus = cardId === undefined ? get('lore-name') : editorTitle
+    focus.focus({ preventScroll: true })
+  }
+
+  function openLibrary(cardId) {
+    const session = sessionFor()
+    rememberScroll()
+    session.editorOpen = false
+    session.list.returnId = cardId
+    showScreen(session)
+    const focus = renderLibrary()
+    restoreScroll()
+    return focus
   }
 
   function renderQuick(focusId) {
     const project = currentProject()
+    const { quickClosed } = sessionFor(project)
     const selected = new Set(addedLoreCards(project))
     const groups = document.createDocumentFragment()
     const cards = project.lorebook ?? []
@@ -178,9 +318,7 @@ export function setupLorebook({ get, currentProject, saveWorkspace, onChange, ad
     get('lore-quick-reference').hidden = enabled || !cards.length
     for (const [kind, entries] of groupedCards(cards)) {
       if (!entries.length) continue
-      const heading = element('h3', loreKinds[kind])
-      const list = element('ul', '')
-      for (const card of entries) {
+      groups.append(cardGroup(kind, entries, quickClosed, card => {
         const row = element('li', '')
         const title = element('strong', card.name)
         const choices = element('div', '')
@@ -203,9 +341,8 @@ export function setupLorebook({ get, currentProject, saveWorkspace, onChange, ad
             input => onSelectLoreCard(card.id, input.checked)),
         )
         row.append(title, choices)
-        list.append(row)
-      }
-      groups.append(heading, list)
+        return row
+      }))
     }
     get('lore-quick-list').replaceChildren(groups)
     if (focusId) get(focusId)?.focus({ preventScroll: true })
@@ -248,6 +385,11 @@ export function setupLorebook({ get, currentProject, saveWorkspace, onChange, ad
     if (entry?.values) entry.values[cardInputs.indexOf(alwaysField)] = checked
     if (entry === editing) alwaysField.checked = checked
     get('lore-quick-status').textContent = ''
+    if (!session.editorOpen) {
+      rememberScroll()
+      renderLibrary()
+      restoreScroll()
+    }
     renderQuick(input.id)
   }
 
@@ -272,7 +414,10 @@ export function setupLorebook({ get, currentProject, saveWorkspace, onChange, ad
       if (before.has(id) && after.has(id) &&
           JSON.stringify(loreCardFields(before.get(id))) === JSON.stringify(loreCardFields(after.get(id)))) continue
       session.entries.delete(id)
-      if (session.selectedId === id && !after.has(id)) session.selectedId = undefined
+      if (session.selectedId === id && !after.has(id)) {
+        session.selectedId = undefined
+        session.editorOpen = false
+      }
     }
     session.cards = project.lorebook
     session.deletions.length = 0
@@ -281,8 +426,13 @@ export function setupLorebook({ get, currentProject, saveWorkspace, onChange, ad
 
   function render() {
     reconcile()
-    renderPicker()
-    selectEditor(sessionFor().selectedId)
+    const session = sessionFor()
+    showScreen(session)
+    if (session.editorOpen) {
+      selectEditor(session.selectedId)
+      renderDiscussion()
+    } else renderLibrary()
+    restoreScroll()
     renderQuick()
     renderFeedback()
     renderContext()
@@ -296,38 +446,75 @@ export function setupLorebook({ get, currentProject, saveWorkspace, onChange, ad
     noteLimit.hidden = !hint
   }
 
-  get('lore-kind').replaceChildren(...Object.entries(loreKinds).map(([key, label]) => new Option(label, key)))
-  picker.addEventListener('change', () => selectEditor(picker.value || undefined))
-  get('lore-new-card').addEventListener('click', () => {
-    selectEditor(undefined)
-    get('lore-name').focus()
+  for (const [key, label] of Object.entries(loreKinds)) {
+    get('lore-kind').append(new Option(label, key))
+    filter.append(new Option(label, key))
+  }
+  function updateFilters() {
+    const { list } = sessionFor()
+    if (Boolean(searchText(list.query)) !== Boolean(searchText(search.value))) list.searchClosed.clear()
+    if (list.kind !== filter.value) {
+      const closed = searchText(search.value) ? list.searchClosed : list.closed
+      closed.delete(filter.value)
+    }
+    Object.assign(list, { query: search.value, kind: filter.value, scrollTop: 0, returnId: undefined })
+    renderLibrary()
+    listScroll.scrollTop = 0
+  }
+  search.addEventListener('input', updateFilters)
+  filter.addEventListener('change', updateFilters)
+  listScroll.addEventListener('scroll', () => {
+    if (listScroll.clientHeight) sessionFor().list.scrollTop = listScroll.scrollTop
   })
+  get('lore-new-card').addEventListener('click', () => openEditor(undefined))
+  returnCard.addEventListener('click', () => openEditor(sessionFor().list.returnId))
+  back.addEventListener('click', () => {
+    const focus = openLibrary(editing.cardId) ?? get('lore-new-card')
+    focus.focus({ preventScroll: true })
+  })
+  discussionToggle.addEventListener('click', () => {
+    if (editing.discussionOpen) assistant.rememberScroll()
+    editing.discussionOpen = !editing.discussionOpen
+    renderDiscussion()
+    if (editing.discussionOpen) {
+      assistant.restoreScroll()
+      if (!prompt.disabled) prompt.focus({ preventScroll: true })
+    }
+  })
+  form.addEventListener('input', describeEdit)
   form.addEventListener('submit', async event => {
     event.preventDefault()
     const project = currentProject()
     const session = sessionFor(project)
     const cards = session.cards ?? []
     const entry = editing
+    if (entry.saving) return
     const { cardId } = entry
     const card = { id: cardId ?? crypto.randomUUID(), ...readFields() }
     if (!validLoreCard(card)) {
       formStatus.textContent = `이름과 설명을 입력해 주세요. 별칭은 ${loreLimits.aliases}개까지 저장할 수 있어요.`
       return
     }
-    if (!await saveCards(project, cardId ? cards.map(item => item.id === cardId ? card : item) : [...cards, card])) {
+    entry.saving = true
+    syncEditorButtons()
+    const saved = await saveCards(project, cardId ? cards.map(item => item.id === cardId ? card : item) : [...cards, card])
+    entry.saving = false
+    if (entry === editing) syncEditorButtons()
+    if (!saved) {
       if (entry === editing) formStatus.textContent = '카드를 저장하지 못했어요. 편집 내용은 입력란에 남아 있어요.'
       return
     }
     session.entries.delete(cardId)
     session.entries.set(card.id, entry)
     entry.cardId = card.id
-    if (entry !== editing) return
     session.selectedId = card.id
-    writeFields(card)
+    if (entry !== editing) return
     syncEditorLabels(card)
-    renderPicker()
-    renderQuick()
-    formStatus.textContent = cardId ? '변경을 저장했어요.' : '카드를 추가했어요.'
+    if (JSON.stringify(loreCardFields(readFields())) === JSON.stringify(loreCardFields(card))) {
+      writeFields(card)
+      formStatus.textContent = cardId ? '변경을 저장했어요.' : '카드를 추가했어요.'
+    } else if (project === currentProject()) describeEdit()
+    if (project === currentProject()) renderQuick()
   })
   get('lore-cancel').addEventListener('click', () => {
     const card = sessionFor().cards?.find(item => item.id === editing.cardId)
@@ -354,43 +541,53 @@ export function setupLorebook({ get, currentProject, saveWorkspace, onChange, ad
     const cards = session.cards ?? []
     const index = cards.findIndex(item => item.id === card.id)
     if (index < 0) return
-    if (!await saveCards(project, cards.filter((_, position) => position !== index))) {
-      session.status = '카드를 삭제하지 못했어요.'
-    } else {
+    const entry = editing
+    entry.saving = true
+    syncEditorButtons()
+    const saved = await saveCards(project, cards.filter((_, position) => position !== index))
+    entry.saving = false
+    if (entry === editing) syncEditorButtons()
+    if (saved) {
       session.deletions.push({ card: cards[index], index })
       session.status = `‘${card.name}’ 카드를 삭제했어요.`
       if (project === currentProject()) {
-        if (editing.cardId === card.id) selectEditor(undefined)
-        renderPicker()
+        openLibrary()
         renderQuick()
+      } else {
+        session.selectedId = undefined
+        session.editorOpen = false
       }
+    } else if (entry === editing) {
+      formStatus.textContent = '카드를 삭제하지 못했어요.'
     }
     if (project !== currentProject()) return
     renderFeedback()
-    get(session.deletions.length ? 'lore-undo-delete' : 'lore-delete-card').focus()
+    get(saved ? 'lore-undo-delete' : 'lore-delete-card').focus()
   })
   get('lore-undo-delete').addEventListener('click', async () => {
     const project = currentProject()
     const session = sessionFor(project)
     const deletion = session.deletions.at(-1)
     if (!deletion) return
+    const undo = get('lore-undo-delete')
+    undo.disabled = true
     const cards = [...(session.cards ?? [])]
     cards.splice(deletion.index, 0, deletion.card)
-    if (await saveCards(project, cards)) {
+    const saved = await saveCards(project, cards)
+    undo.disabled = false
+    if (saved) {
       session.deletions.pop()
       session.status = `‘${deletion.card.name}’ 카드를 복구했어요.`
-      if (project === currentProject()) {
-        selectEditor(deletion.card.id)
-        renderPicker()
-        renderQuick()
-      }
     } else {
       session.status = '카드를 복구하지 못했어요.'
     }
     if (project !== currentProject()) return
     renderFeedback()
-    if (session.deletions.length) get('lore-undo-delete').focus()
-    else picker.focus()
+    if (saved) {
+      const focus = openLibrary(deletion.card.id) ?? get('lore-new-card')
+      renderQuick()
+      focus.focus({ preventScroll: true })
+    } else undo.focus()
   })
 
   prompt.maxLength = assistantMessageLimit
@@ -422,5 +619,5 @@ export function setupLorebook({ get, currentProject, saveWorkspace, onChange, ad
     get('lore-description').focus()
   })
 
-  return { render, renderContext, renderQuick, rememberScroll: assistant.rememberScroll, restoreScroll: assistant.restoreScroll }
+  return { render, renderContext, renderQuick, rememberScroll, restoreScroll }
 }
