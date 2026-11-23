@@ -283,6 +283,16 @@ function syncManuscriptGutter() {
   const translate = `0 ${-manuscript.scrollTop}px`
   manuscriptLines.style.translate = translate
   manuscriptSceneMarks.style.translate = translate
+  syncSelectedSceneViewportEdges()
+}
+
+function syncSelectedSceneViewportEdges() {
+  const edges = get('manuscript-selected-scene-viewport-edges')
+  if (!edges) return
+  const top = manuscript.scrollTop + 1
+  const bottom = manuscript.scrollTop + manuscript.clientHeight - 1
+  const right = manuscript.offsetLeft + manuscript.clientWidth
+  edges.setAttribute('d', `M 0 ${top} H ${right} M 0 ${bottom} H ${right}`)
 }
 
 function renderManuscriptLines() {
@@ -337,8 +347,8 @@ function sameManuscriptRow(first, last, rowHeight) {
 function createSceneOutline(bounds, first, last, endsWithinRow) {
   const { left, right, textLeft, mirrorLeft, top, rowHeight } = bounds
   const firstX = Math.round(first.left - mirrorLeft)
-  const startX = firstX > 0 ? textLeft + firstX + 1 : left
-  const endX = endsWithinRow ? textLeft + Math.round(last.right - mirrorLeft) - 1 : right
+  const startX = firstX > 0 ? Math.min(right - 1, textLeft + firstX + 1) : left
+  const endX = endsWithinRow ? Math.min(right, textLeft + Math.round(last.right - mirrorLeft) - 1) : right
   const startY = first.top - top - 3
   const endY = last.bottom - top + 3
   if (sameManuscriptRow(first, last, rowHeight) || (startX === left && endX === right)) {
@@ -362,6 +372,24 @@ function createSceneOutline(bounds, first, last, endsWithinRow) {
   return outline
 }
 
+function appendSelectedSceneViewportEdges(outlines, selectedOutline) {
+  selectedOutline.id = 'manuscript-selected-scene-outline'
+  const clip = document.createElementNS(svgNamespace, 'clipPath')
+  clip.id = 'manuscript-selected-scene-clip'
+  const silhouette = document.createElementNS(svgNamespace, 'use')
+  silhouette.setAttribute('href', '#manuscript-selected-scene-outline')
+  clip.append(silhouette)
+
+  // The viewport edges should cover only the visible slice of the selected scene.
+  const group = document.createElementNS(svgNamespace, 'g')
+  group.setAttribute('class', 'manuscript-scene-viewport-edges')
+  group.setAttribute('clip-path', 'url(#manuscript-selected-scene-clip)')
+  const edges = document.createElementNS(svgNamespace, 'path')
+  edges.id = 'manuscript-selected-scene-viewport-edges'
+  group.append(edges)
+  outlines.append(clip, group)
+}
+
 function renderManuscriptSceneMarks() {
   const project = currentProject()
   const { manuscript: text, savedScenes } = project
@@ -378,7 +406,7 @@ function renderManuscriptSceneMarks() {
   const textLeft = manuscript.offsetLeft
   const bounds = {
     left: textLeft - 6,
-    right: textLeft + manuscript.clientWidth + 4,
+    right: textLeft + manuscript.clientWidth - 2,
     textLeft,
     mirrorLeft: manuscriptLines.getBoundingClientRect().left,
     top: manuscriptLines.firstElementChild.getBoundingClientRect().top,
@@ -412,7 +440,10 @@ function renderManuscriptSceneMarks() {
     }
     if (selected) mark.classList.add('is-selected')
   }
+  const selectedOutline = outlines.querySelector('.is-selected')
+  if (selectedOutline) appendSelectedSceneViewportEdges(outlines, selectedOutline)
   manuscriptSceneMarks.replaceChildren(marks)
+  syncSelectedSceneViewportEdges()
 }
 
 function scheduleManuscriptSceneMarks() {
@@ -423,31 +454,11 @@ function scheduleManuscriptSceneMarks() {
   })
 }
 
-function setManuscriptScrollPadding(above = 0, below = 0) {
-  manuscript.style.paddingBlock = `${above}px ${below}px`
-  manuscriptLines.style.paddingBlockStart = `${above}px`
-  manuscriptSceneMarks.style.insetBlockStart = `${above}px`
-}
-
 function showContinuationStart() {
   if (pendingContinuationStart === undefined || !manuscript.clientHeight) return
-  const line = manuscriptLines.children[manuscriptLineAt(pendingContinuationStart) - 1]
+  const start = pendingContinuationStart
   pendingContinuationStart = undefined
-  setManuscriptScrollPadding()
-  syncManuscriptGutter()
-
-  const center = manuscript.clientHeight / 2
-  const halfLineHeight = parseFloat(getComputedStyle(manuscript).lineHeight) / 2
-  const start = line.offsetTop + halfLineHeight
-  setManuscriptScrollPadding(
-    Math.max(0, Math.ceil(center - start)),
-    Math.max(0, Math.ceil(center - (manuscriptLines.offsetHeight - start))),
-  )
-
-  // Adding scroll space can introduce a scrollbar and change line wrapping.
-  syncManuscriptGutter()
-  manuscript.scrollTop = line.offsetTop + halfLineHeight - center
-  syncManuscriptGutter()
+  scrollManuscriptTo(start)
 }
 
 function manuscriptLineRange({ start, end }) {
@@ -592,7 +603,6 @@ function renderWorkspace() {
   manuscriptComposition = undefined
   sceneUndo.length = 0
   pendingContinuationStart = undefined
-  setManuscriptScrollPadding()
   revisionLine.value = ''
   revisionLine.setCustomValidity('')
   get('revision-direction').value = ''
@@ -807,13 +817,28 @@ function goToSavedScene(scene) {
   if (scene.range) scrollManuscriptTo(scene.range.start)
 }
 
-function selectSavedScene(scene) {
+function selectSavedScene(scene, { navigate = true } = {}) {
   const project = currentProject()
-  selectedScenes.set(project, scene.id)
+  if (scene) selectedScenes.set(project, scene.id)
+  else selectedScenes.delete(project)
   sceneMessages.delete(project)
-  goToSavedScene(scene)
+  if (scene && navigate) goToSavedScene(scene)
   scheduleManuscriptSceneMarks()
   syncSceneControls()
+}
+
+function selectSceneAtManuscriptCaret() {
+  const offset = manuscript.selectionStart
+  if (document.activeElement !== manuscript || offset !== manuscript.selectionEnd ||
+      manuscriptComposition || manuscriptCommitPending()) return
+  const project = currentProject()
+  const selected = selectedScene(project)
+  const scenes = project.savedScenes ?? []
+  // A scene starting at the caret wins over a scene ending at the same offset.
+  const scene = scenes.find(({ range }) => range && range.start <= offset && offset < range.end) ??
+    scenes.find(({ range }) => range?.end === offset)
+  if (!scene && selected && !selected.range) return
+  if (scene?.id !== selected?.id) selectSavedScene(scene, { navigate: false })
 }
 
 const research = setupResearch({
@@ -1814,6 +1839,7 @@ manuscript.addEventListener('input', event => {
   applyManuscriptInput(event.inputType, selection)
 })
 manuscript.addEventListener('scroll', syncManuscriptGutter)
+manuscript.addEventListener('selectionchange', selectSceneAtManuscriptCaret)
 new ResizeObserver(() => {
   syncManuscriptGutter()
   scheduleManuscriptSceneMarks()

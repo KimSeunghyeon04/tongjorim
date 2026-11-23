@@ -239,7 +239,7 @@
   gap: 12px;
 }
 .manuscript-editor.has-scene-marks { --scene-gutter-width: 34px; }
-.manuscript-scene-overlay { position: absolute; inset: 0 -5px 0 0; overflow: hidden; pointer-events: none; user-select: none; }
+.manuscript-scene-overlay { position: absolute; inset: 0; overflow: hidden; pointer-events: none; user-select: none; }
 .manuscript-scene-marks { position: absolute; inset: 0 0 auto; }
 .manuscript-scene-outlines {
   position: absolute;
@@ -251,7 +251,9 @@
   stroke: var(--paper-line);
   stroke-linejoin: round;
 }
-.manuscript-scene-outlines > .is-selected { stroke: var(--accent); stroke-width: 2; }
+.manuscript-scene-outlines > .is-selected,
+.manuscript-scene-viewport-edges { stroke: var(--accent); stroke-width: 2; }
+.manuscript-scene-viewport-edges { fill: none; }
 .manuscript-scene-mark {
   position: absolute;
   inset-inline-start: 0;
@@ -297,7 +299,13 @@
   border-radius: 2px;
 }
 .manuscript::placeholder { color: #646e86; opacity: 1; }
-.manuscript:focus-visible, .continuation-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.continuation-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.manuscript:focus-visible { outline: none; }
+#manuscript-paper:has(.manuscript:focus-visible) .paper-label label {
+  color: var(--accent);
+  text-decoration: underline 2px;
+  text-underline-offset: 3px;
+}
 .manuscript, .manuscript-lines, .revision-text, .continuation-scroll {
   font-family: var(--manuscript-font);
   font-size: 17px;
