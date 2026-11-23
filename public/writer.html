@@ -73,13 +73,22 @@
             </div>
           </div>
           <section class="paper" id="continuation-paper" aria-labelledby="continuation-label" hidden>
-            <div class="paper-label">
-              <span class="continuation-label" id="continuation-label"></span>
-              <div class="continuation-version-actions">
-                <span id="continuation-version" role="status"></span>
-                <button type="button" class="quiet-button" id="continuation-previous" hidden>이전 초안 보기</button>
+            <header class="continuation-header">
+              <div class="paper-label">
+                <span class="continuation-label" id="continuation-label"></span>
+                <div class="continuation-version-actions">
+                  <span id="continuation-version" role="status"></span>
+                  <button type="button" class="quiet-button" id="continuation-previous" hidden>이전 초안 보기</button>
+                </div>
               </div>
-            </div>
+              <div class="continuation-changes" id="continuation-changes" hidden>
+                <span id="continuation-change-status" role="status"></span>
+                <div class="continuation-change-actions">
+                  <button type="button" class="quiet-button" id="continuation-change-toggle" aria-controls="continuation-text">수정 표시 숨기기</button>
+                  <button type="button" class="quiet-button" id="continuation-change-next" aria-controls="continuation-text">다음 변경</button>
+                </div>
+              </div>
+            </header>
             <div class="manuscript-editor">
               <div class="continuation-scroll" id="continuation-scroll" tabindex="0" role="region" aria-label="앞뒤 원고와 초안">
                 <p class="continuation-original" id="continuation-original"></p>

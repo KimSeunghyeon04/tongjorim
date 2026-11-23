@@ -332,8 +332,44 @@
   white-space: nowrap;
 }
 .continuation-version-actions .quiet-button { min-height: 0; padding: 0 2px; }
+.continuation-header:has(.continuation-changes:not([hidden])) .paper-label { margin-bottom: 0; }
+.continuation-changes {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0 8px;
+  margin-block: 2px 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.continuation-change-actions { display: flex; gap: 4px; }
 .continuation-scroll { overflow: auto; }
 .continuation-scroll p { white-space: pre-wrap; }
+.continuation-change :is(ins, del) { border-radius: 2px; box-decoration-break: clone; }
+.continuation-change ins {
+  color: #1d5941;
+  background: #e7f3ed;
+  text-decoration: underline;
+  text-underline-offset: .2em;
+}
+.continuation-change del { color: #843937; background: #fbedea; }
+.continuation-change del + ins { margin-inline-start: .2em; }
+.continuation-change[aria-current] :is(ins, del, button, .continuation-spacing) { outline: 1px solid var(--accent); }
+.continuation-deletion { display: block; margin-block: 4px; }
+.continuation-change > .quiet-button, .continuation-spacing { color: #843937; background: #fbedea; }
+.continuation-folded > .quiet-button { margin-inline: 4px; min-height: 24px; }
+:is(.continuation-deletion, .continuation-folded) > del { display: block; padding: 3px 6px; }
+.continuation-folded > del + ins { margin-inline-start: 0; }
+.continuation-spacing {
+  display: inline-block;
+  margin-inline: 3px;
+  padding-inline: 4px;
+  border-radius: 2px;
+  font: 650 11px/1.6 "Segoe UI", sans-serif;
+  vertical-align: middle;
+}
 .continuation-original, .continuation-following { color: var(--muted); }
 .continuation-original { margin-bottom: 1em; }
 .continuation-following { margin-top: 1em; }

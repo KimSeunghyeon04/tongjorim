@@ -160,6 +160,10 @@ export function sceneVersions(versions) {
   }))
 }
 
+export function* sceneVersionPath(versions, selected) {
+  for (let version = selected; version !== null; version = versions[version].parent) yield version
+}
+
 export function validSavedScenes(scenes, manuscript) {
   if (!Array.isArray(scenes)) return false
   const ids = new Set()

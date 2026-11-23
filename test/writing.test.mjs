@@ -265,6 +265,22 @@ test('초안 수정은 앞뒤 원고에 한도를 나눠 쓰고 검색 결과를
     { recentManuscript: scene.text, recentLimit: 0 }).query, scene.direction)
 })
 
+test('수정 이력은 입력 예산에 포함되고 한도를 넘겨도 일부 이력만 보내지 않는다', () => {
+  const project = { title: '창가', direction: '', manuscript: '', model: 'qa/write', maxTokens: 128 }
+  const scene = { text: '불이 꺼졌다.', direction: '이전 문장을 살려 줘.' }
+  const removed = '아주 멀리 흔들리는 불빛을 오래 바라보았다. '.repeat(500)
+  const history = [
+    { fromVersion: 1, toVersion: 2, direction: '등불 묘사를 빼 줘.', diff: `@@ -0,${removed.length} +0,0 @@\n- ${removed}` },
+    { fromVersion: 2, toVersion: 4, direction: '불빛을 줄여 줘.', diff: '@@ -0,2 +0,1 @@\n- 등불\n+ 불' },
+  ]
+  const prepare = revision => planWritingContext(project, [], { contextLength: 1024 },
+    { manuscript: 0, pastPassages: 0 }, [], revision).finish()
+  assert.ok(prepare(scene).remaining > 0)
+  const result = prepare({ ...scene, history })
+  assert.ok(result.remaining < 0)
+  assert.deepEqual(result.body.sceneRevision, { ...scene, history })
+})
+
 test('장면 분량은 참고 자료 없이도 요청에 포함되고 비어 있으면 생략된다', () => {
   const project = { title: '저편', direction: '문을 열어', manuscript: '', model: 'qa/write', maxTokens: 1024 }
   const request = sceneLength => planWritingContext({ ...project, sceneLength }, [], null,

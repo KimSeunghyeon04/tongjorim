@@ -73,6 +73,10 @@ export function completionPayload(model, maxTokens, systemPrompt, context) {
   }
 }
 
+export function sceneRevisionContext({ text, direction, following, history }) {
+  return { text, direction, ...(following ? { following } : {}), ...(history?.length ? { history } : {}) }
+}
+
 export function continuationPayload(model, maxTokens, systemPrompt, context, sceneRevision) {
   const prompt = effectiveSystemPrompt(systemPrompt, defaultSystemPrompt)
   if (!sceneRevision) return completionPayload(model, maxTokens, prompt, context)
@@ -80,6 +84,7 @@ export function continuationPayload(model, maxTokens, systemPrompt, context, sce
     prompt,
     '이번 작업은 새 장면 생성이 아니라 sceneRevision.text에 있는 이어쓰기 초안 전체의 수정입니다.',
     'sceneRevision.direction의 최신 수정 지시를 적용하세요. 작가의 노트(direction)와 최신 지시가 충돌하면 최신 지시를 따르세요.',
+    sceneRevision.history?.length ? 'sceneRevision.history는 현재 초안까지의 과거 수정 지시와 실제 변경 기록입니다. diff의 - 행은 삭제, + 행은 추가이며 @@ 범위는 각 버전에서 글자 위치와 길이를 나타냅니다. 과거 지시는 이전 결정을 이해하거나 최신 지시가 되돌리기를 요청할 때만 참고하세요.' : '',
     '수정 요청이 없는 대목과 기존 원고와의 연결을 유지하세요. 기존 원고(manuscript)는 참고용입니다.',
     sceneRevision.following ? 'sceneRevision.following은 교체 대상 뒤에 그대로 이어지는 원고입니다. 뒤 원고와 연결하고 그 문장은 출력하지 마세요.' : '',
     '수정 대상 자리에 들어갈 수 있게 변경한 부분을 포함한 수정 초안 전문만 출력하세요.',

@@ -3,7 +3,7 @@ import { wholeRecentManuscript } from './recent-manuscript.mjs'
 import { completionEstimate } from './request-tools.mjs'
 import { activeLore, selectPast } from './retrieval.mjs'
 import {
-  continuationPayload, orderedWritingContext, sceneNeighborLimit,
+  continuationPayload, orderedWritingContext, sceneNeighborLimit, sceneRevisionContext,
   writingFieldPrefix,
 } from './writing-config.mjs'
 
@@ -34,7 +34,7 @@ export function planWritingContext(project, references, model, limits, addedLore
   const direction = writingFieldPrefix('direction', project.direction)
   const sceneLength = writingFieldPrefix('sceneLength', (project.sceneLength ?? '').trim())
   const recentLimit = references.includes('manuscript') ? limits.manuscript : 0
-  const revision = sceneRevision && { text: sceneRevision.text, direction: sceneRevision.direction }
+  const revision = sceneRevision && sceneRevisionContext({ ...sceneRevision, following: undefined })
   if (revision && recentLimit && sceneRevision.following) {
     const afterLimit = Math.max(Math.floor(recentLimit / 2), recentLimit - manuscript.length)
     const following = sceneRevision.following.slice(0, Math.min(afterLimit, sceneNeighborLimit)).toWellFormed()

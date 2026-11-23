@@ -8,7 +8,7 @@ import {
   assistantHistoryTurns, assistantMessageLimit, assistantNoteDraftLimit, assistantRepairTextLimit, assistantReplyLimit,
   completionPayload, continuationPayload, defaultLoreSystemPrompt, defaultMemoryPrompt, defaultNoteSystemPrompt, defaultRevisionPrompt, defaultSystemPrompt,
   defaultReferences, effectiveSystemPrompt, freeModel, memoryExcerptLimit, modelIdPattern, validModelId,
-  noteDraftActions, noteKinds, orderedWritingContext, revisionParagraphLimit, sceneDraftLimit, sceneNeighborLimit, systemPromptLimit,
+  noteDraftActions, noteKinds, orderedWritingContext, revisionParagraphLimit, sceneDraftLimit, sceneNeighborLimit, sceneRevisionContext, systemPromptLimit,
   validWritingTokenLimit, writingFields,
 } from './public/writing-config.mjs'
 import { actualUsage } from './public/request-tools.mjs'
@@ -42,6 +42,7 @@ const assets = new Map([
   ['/memory-knowledge.mjs', ['memory-knowledge.mjs', 'text/javascript; charset=utf-8']],
   ['/numbered-passages.mjs', ['numbered-passages.mjs', 'text/javascript; charset=utf-8']],
   ['/manuscript-scenes.mjs', ['manuscript-scenes.mjs', 'text/javascript; charset=utf-8']],
+  ['/draft-changes.mjs', ['draft-changes.mjs', 'text/javascript; charset=utf-8']],
   ['/recent-manuscript.mjs', ['recent-manuscript.mjs', 'text/javascript; charset=utf-8']],
   ['/scene-review.mjs', ['scene-review.mjs', 'text/javascript; charset=utf-8']],
   ['/scene-review-jobs.mjs', ['scene-review-jobs.mjs', 'text/javascript; charset=utf-8']],
@@ -148,6 +149,20 @@ function resolveSystemPrompt(prompt, fallback) {
   return effectiveSystemPrompt(prompt, fallback)
 }
 
+function readRevisionHistory(history) {
+  if (history === undefined) return undefined
+  const error = () => new RequestError(400, '초안 수정 이력의 형식을 확인해 주세요.')
+  if (!Array.isArray(history)) throw error()
+  let expectedParent = 1
+  return history.map(entry => {
+    const { fromVersion, toVersion, direction, diff } = entry ?? {}
+    if (fromVersion !== expectedParent || !Number.isSafeInteger(toVersion) || toVersion <= fromVersion ||
+        typeof direction !== 'string' || direction.length > writingFields.direction || typeof diff !== 'string') throw error()
+    expectedParent = toVersion
+    return { fromVersion, toVersion, direction, diff }
+  })
+}
+
 function writingCompletion({ model, maxTokens, draft, systemPrompt, references, sceneRevision }, { allowEmpty = false } = {}) {
   const context = Object.fromEntries(Object.keys(writingFields).map(field => [field, draft?.[field]]))
   context.synopsis ??= ''
@@ -169,13 +184,14 @@ function writingCompletion({ model, maxTokens, draft, systemPrompt, references, 
   }
   const prompt = resolveSystemPrompt(systemPrompt, defaultSystemPrompt)
   if (sceneRevision !== undefined) {
-    const { text, direction, following } = sceneRevision ?? {}
+    const { text, direction, following, history } = sceneRevision ?? {}
     if (typeof text !== 'string' || !text.trim() || text.length > sceneDraftLimit ||
         typeof direction !== 'string' || !direction.trim() || direction.length > writingFields.direction ||
         (following !== undefined && (typeof following !== 'string' || following.length > sceneNeighborLimit))) {
       throw new RequestError(400, '수정할 초안과 수정 지시를 확인해 주세요.')
     }
-    return continuationPayload(model, maxTokens, prompt, included, { text, direction, ...(following ? { following } : {}) })
+    return continuationPayload(model, maxTokens, prompt, included,
+      sceneRevisionContext({ text, direction, following, history: readRevisionHistory(history) }))
   }
   if (!allowEmpty && !Object.entries(included).some(([field, text]) => field !== 'projectTitle' && field !== 'sceneLength' && text.trim())) {
     throw new RequestError(400, '보낼 원고나 메모를 선택하거나 이어쓰기 지시를 입력해 주세요.')

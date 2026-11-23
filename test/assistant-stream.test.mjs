@@ -385,6 +385,38 @@ test('이어쓰기 초안 수정은 선택한 초안과 최신 지시를 기존 
   })
 })
 
+test('수정 요청 미리보기와 실제 생성이 같은 가지의 전체 diff를 보낸다', async t => {
+  const { appFetch, calls } = await startApp(t, [completion('바람은 따뜻하다. 촛불이 흔들렸다.')])
+  const history = [
+    { fromVersion: 1, toVersion: 2, direction: '따뜻하게 바꿔 줘.', diff: '@@ -4,3 +4,4 @@\n- 차갑다\n+ 따뜻하다' },
+    { fromVersion: 2, toVersion: 4, direction: '촛불 문단을 빼 줘.', diff: '@@ -9,11 +9,0 @@\n- \n- \n- 촛불이 흔들렸다.' },
+  ]
+  const sceneRevision = { text: '바람은 따뜻하다.', direction: '촛불 문장만 살려 줘.', history }
+  const body = { model, maxTokens: 512, references: [], draft: { projectTitle: '창가', direction: '' }, sceneRevision }
+  const post = input => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) })
+
+  const invalid = await appFetch('/api/write', post({ ...body, sceneRevision: { ...sceneRevision, history: [history[1]] } }))
+  assert.equal(invalid.status, 400)
+  await invalid.text()
+  const tooLarge = await appFetch('/api/write', post({ ...body, sceneRevision: {
+    ...sceneRevision, history: [{ ...history[0], diff: '- ' + '가'.repeat(350_000) }],
+  } }))
+  assert.equal(tooLarge.status, 413)
+  await tooLarge.text()
+  assert.equal(calls.length, 0)
+
+  const preview = await appFetch('/api/write/preview', post(body))
+  assert.equal(preview.status, 200)
+  let text = ''
+  await requestCompletion('/api/write', body, { signal: AbortSignal.timeout(5000), onText(chunk) { text += chunk } })
+  assert.equal(text, '바람은 따뜻하다. 촛불이 흔들렸다.')
+  assert.equal(calls.length, 1)
+  const request = calls[0].body
+  assert.deepEqual(request, await preview.json())
+  assert.deepEqual(JSON.parse(request.messages[1].content).sceneRevision, sceneRevision)
+  assert.match(request.messages[0].content, /과거 지시는 이전 결정을 이해하거나 최신 지시가 되돌리기를 요청할 때만 참고/)
+})
+
 test('32 MiB를 넘는 작업공간을 압축 저장하고 응답 유실 뒤에도 동시 저장 규칙을 적용한다', async t => {
   const { appFetch } = await startApp(t, [])
   const workspace = readWorkspace(null)

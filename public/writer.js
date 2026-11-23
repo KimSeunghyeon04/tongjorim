@@ -10,8 +10,9 @@ import { memoryForPrompt, memoryReadThrough, memoryRequest, setManuscriptText, u
 import { manuscriptMemoryPayload } from './memory-knowledge.mjs'
 import {
   forgetSceneUndo, isSceneHistoryEdit, manuscriptEdit, reconcileSceneUndo, rememberUndoneComposition,
-  savedScenesInManuscriptOrder, sceneHistoryReplay, sceneRange, sceneRangeAvailable, sceneTitle, sceneVersions,
+  savedScenesInManuscriptOrder, sceneHistoryReplay, sceneRange, sceneRangeAvailable, sceneTitle, sceneVersionPath, sceneVersions,
 } from './manuscript-scenes.mjs'
+import { sceneRevisionHistory, setupDraftChanges } from './draft-changes.mjs'
 import { exportPack, exportProject, readPack, readProject, referenceSettingsFor } from './project-files.mjs'
 import { currentProjectOf, makeProject, mergeModelSettings, projectName, readWorkspace, workspaceMatchesSnapshot } from './writing-workspace.mjs'
 import { cacheWorkspace, openWorkspaceStorage, readCachedWorkspace, readLatestWorkspace, storageConflictMessage, storageKey, workspaceChangeEvent, workspaceStatusEvent, workspaceStorageStatus } from './workspace-storage.mjs'
@@ -51,6 +52,7 @@ const writingStatus = get('writing-status')
 const continuationHistory = get('continuation-history')
 const continuationDirection = get('continuation-direction')
 const continuationPrevious = get('continuation-previous')
+const renderDraftChanges = setupDraftChanges(get)
 const continuationRewrite = get('continuation-rewrite')
 const continuationStop = get('continuation-stop')
 const continuationAccept = get('continuation-accept')
@@ -1032,6 +1034,7 @@ function renderContinuation() {
   historyTab.hidden = !editing || activeWorkspaceTab !== manuscriptTab
   if (historyTab.hidden && manuscriptPanel === 'continuation') switchPanel()
   if (!editing) {
+    if (!draft) renderDraftChanges()
     continuationHistory.replaceChildren()
     return
   }
@@ -1050,12 +1053,10 @@ function renderContinuation() {
   get('continuation-original').hidden = !draft.tail
   get('continuation-following').textContent = draft.following ?? ''
   get('continuation-following').hidden = !draft.following
-  get('continuation-text').textContent = version.text
+  renderDraftChanges(version, versions[version.parent], selected !== draft.currentVersion)
   continuationDirection.value = draft.direction
-  get('continuation-scroll').scrollTop = 0
 
-  const ancestors = new Set()
-  for (let current = selected; current !== null; current = versions[current].parent) ancestors.add(current)
+  const ancestors = new Set(sceneVersionPath(versions, selected))
   const branched = versions.some(({ parent }, index) => parent !== null && parent !== index - 1)
   continuationHistory.replaceChildren(...versions.map(({ direction, parent, source }, index) => {
     const item = document.createElement('li')
@@ -1178,7 +1179,10 @@ async function rewriteContinuation() {
       sceneLength: draft.sceneLength, references: referenceSettingsFor(project).map(ref => ({ ...ref })),
       manuscriptMemory: memoryReadThrough(project) <= start ? project.manuscriptMemory : undefined,
     }
-    const sceneRevision = { text: draft.versions[parent].text, direction, following: draft.following }
+    const sceneRevision = {
+      text: draft.versions[parent].text, direction, following: draft.following,
+      history: sceneRevisionHistory(draft.versions, parent),
+    }
     const { body, remaining } = await research.prepare(
       project, catalogModel(project.model), signal, { source, sceneRevision, assertCurrent },
     )
