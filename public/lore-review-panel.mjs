@@ -62,6 +62,7 @@ export function setupLoreReviews({ get, currentProject, saveWorkspace, goToPassa
     get('lore-review-notice').hidden = !message
     get('open-lore-review').hidden = !fresh
     get('retry-scene-review').hidden = !error
+    get('dismiss-scene-review-error').hidden = !error || Boolean(fresh)
   }
 
   function render({ focus = false } = {}) {

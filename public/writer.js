@@ -850,7 +850,7 @@ const sceneReviewJobs = setupSceneReviewJobs({
   },
 })
 const loreReviews = setupLoreReviews({
-  get, currentProject, saveWorkspace, goToPassage, jobError: sceneReviewJobs.error,
+  get, currentProject, saveWorkspace, goToPassage, jobError: sceneReviewJobs.visibleError,
   onOpen: () => setWorkspaceTab(loreWorkspaceTab),
   onChange(project, cardsChanged) {
     if (project !== currentProject() || !cardsChanged) return
@@ -859,6 +859,11 @@ const loreReviews = setupLoreReviews({
   },
 })
 get('retry-scene-review').addEventListener('click', () => sceneReviewJobs.start(currentProject(), { retry: true }))
+get('dismiss-scene-review-error').addEventListener('click', () => {
+  sceneReviewJobs.dismissError(currentProject())
+  const focusTarget = generate.disabled ? manuscript : generate
+  focusTarget.focus({ preventScroll: true })
+})
 const catalogModel = id => models.find(model => model.id === id)
 const sourcePanel = setupSourcePanel({
   get, currentProject, getModel: catalogModel, research, saveWorkspace, onSave: writingInputsChanged,

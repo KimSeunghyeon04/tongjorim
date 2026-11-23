@@ -13,7 +13,7 @@ export function setupSceneReviewJobs({ hasProject, saveWorkspace, onChange }) {
     const previous = jobs.get(project)
     if (previous?.controller || (previous?.error && !retry) || !pendingReview(project)) return
     const controller = new AbortController()
-    const job = { controller, error: '' }
+    const job = { controller, error: '', errorDismissed: false }
     jobs.set(project, job)
     onChange(project)
     run()
@@ -28,7 +28,10 @@ export function setupSceneReviewJobs({ hasProject, saveWorkspace, onChange }) {
           try {
             await analyze(project, review, signal)
           } catch (error) {
-            if (!signal.aborted) job.error = error instanceof SyntaxError ? '장면 검토 응답의 형식이 올바르지 않아요.' : error.message
+            if (!signal.aborted) {
+              job.error = error instanceof SyntaxError ? '장면 검토 응답의 형식이 올바르지 않아요.' : error.message
+              job.errorDismissed = false
+            }
           }
           onChange(project)
         }
@@ -98,7 +101,16 @@ export function setupSceneReviewJobs({ hasProject, saveWorkspace, onChange }) {
 
   return {
     start,
-    error: project => jobs.get(project)?.error ?? '',
+    visibleError(project) {
+      const job = jobs.get(project)
+      return job && !job.errorDismissed ? job.error : ''
+    },
+    dismissError(project) {
+      const job = jobs.get(project)
+      if (!job?.error || job.errorDismissed) return
+      job.errorDismissed = true
+      onChange(project)
+    },
     stop: project => jobs.get(project)?.controller?.abort(),
   }
 }
