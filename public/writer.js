@@ -1355,6 +1355,8 @@ function renderContinuation() {
   continuationHistory.replaceChildren(...versions.map(({ direction, parent, source }, index) => {
     const item = document.createElement('li')
     item.classList.toggle('on-version-path', ancestors.has(index))
+    const entry = document.createElement('div')
+    entry.className = 'continuation-version-entry'
     const button = document.createElement('button')
     button.type = 'button'
     button.dataset.version = index
@@ -1378,13 +1380,14 @@ function renderContinuation() {
       source.textContent = `버전 ${parent + 1}에서 수정`
       button.append(source)
     }
+    entry.append(button)
     if (!source) {
-      const instruction = document.createElement('span')
+      const instruction = document.createElement('p')
       instruction.className = 'continuation-instruction'
       instruction.textContent = direction.trim() || '작가의 노트 없음'
-      button.append(instruction)
+      entry.append(instruction)
     }
-    item.append(button)
+    item.append(entry)
     return item
   }))
   get('scene-version-origins').replaceChildren(...(draft.scene ?? draft.archive)?.origins?.map(({ id, version }) => {
