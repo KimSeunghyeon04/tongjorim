@@ -70,6 +70,8 @@
               <div class="manuscript-gutter" aria-hidden="true"><div id="manuscript-lines" class="manuscript-lines"></div></div>
               <textarea id="manuscript" class="manuscript" placeholder="첫 문장을 쓰거나, 이어쓰기 지시로 소설을 시작하세요." spellcheck="false"></textarea>
               <div class="manuscript-scene-overlay" aria-hidden="true"><div class="manuscript-scene-marks" id="manuscript-scene-marks"></div></div>
+              <div class="manuscript-scene-actions" id="manuscript-scene-actions"></div>
+              <button type="button" class="quiet-button manuscript-add-scene" id="manuscript-add-scene" aria-label="원고 끝에 새 장면 추가" title="원고 끝에 새 장면 추가" disabled>+<span>새 장면</span></button>
             </div>
           </div>
           <section class="paper" id="continuation-paper" aria-labelledby="continuation-label" hidden>
@@ -137,14 +139,15 @@
           <p class="field-hint" id="writing-context-limit" role="status" hidden></p>
         </form>
         <form class="manuscript-composer" id="continuation-composer" aria-label="초안 수정" hidden>
-          <div class="writing-input">
-            <label for="continuation-direction">수정 지시</label>
+          <div class="writing-input" id="continuation-instruction-field">
+            <label id="continuation-direction-label" for="continuation-direction">수정 지시</label>
             <input class="writing-field" id="continuation-direction" type="text" required
               placeholder="바꾸고 싶은 묘사나 전개를 적어 주세요." autocomplete="off">
           </div>
           <div class="manuscript-composer-actions continuation-actions">
             <p class="field-hint" id="continuation-status" role="status"></p>
             <div class="compact-actions">
+              <button class="quiet-button" id="preview-scene-request" type="button">요청 미리보기</button>
               <button class="outline-button" id="continuation-rewrite" type="submit">다시 써줘</button>
               <button class="outline-button" id="continuation-stop" type="button" hidden>수정 중지</button>
               <button class="writing-primary" id="continuation-accept" type="button">원고 끝에 붙이기</button>
@@ -474,16 +477,39 @@
       <section id="scenes-panel" class="tool-panel" aria-labelledby="scenes-title" hidden>
         <h2 class="sidebar-heading" id="scenes-title">저장된 장면</h2>
         <ul class="saved-scene-list" id="saved-scene-list"></ul>
+        <div class="compact-actions" id="scene-batch-actions" hidden>
+          <span class="field-hint" id="scene-selection-count" role="status"></span>
+          <button class="outline-button" id="scene-merge" type="button">장면 합치기</button>
+          <button class="quiet-button destructive-button" id="scene-delete-selected" type="button">선택 삭제</button>
+        </div>
         <button class="outline-button saved-scene-rewrite" id="saved-scene-rewrite" type="button" hidden>장면 다시 쓰기</button>
         <div class="scene-registration">
           <p class="field-hint" id="scene-range-hint" role="status"></p>
-          <button class="quiet-button" id="scene-register" type="button">장면으로 등록</button>
-          <button class="outline-button" id="scene-confirm-range" type="button" hidden>선택 범위로 위치 확인</button>
+          <div class="scene-split-preview" id="scene-split-preview" hidden>
+            <p class="field-hint" id="scene-split-before"></p>
+            <p class="scene-cut-label">나눌 위치</p>
+            <p class="field-hint" id="scene-split-after"></p>
+            <div class="compact-actions">
+              <button class="outline-button" id="scene-split-confirm" type="button">이 위치에서 나누기</button>
+              <button class="quiet-button" id="scene-split-cancel" type="button">취소</button>
+            </div>
+          </div>
+          <div class="compact-actions">
+            <button class="quiet-button" id="scene-split" type="button" disabled>장면 나누기</button>
+            <button class="quiet-button" id="scene-versions" type="button" hidden>버전 이력</button>
+            <button class="quiet-button" id="scene-undo" type="button" hidden>구조 되돌리기</button>
+            <button class="quiet-button" id="scene-redo" type="button" hidden>구조 다시 실행</button>
+          </div>
         </div>
+        <details id="archived-scenes" hidden>
+          <summary>보관된 장면</summary>
+          <ul class="saved-scene-list" id="archived-scene-list"></ul>
+        </details>
       </section>
       <section id="continuation-panel" class="tool-panel" aria-labelledby="continuation-history-title" hidden>
         <h2 class="sidebar-heading" id="continuation-history-title">초안 버전</h2>
         <ol class="continuation-history" id="continuation-history"></ol>
+        <div id="scene-version-origins"></div>
       </section>
     </aside>
   </div>
@@ -640,6 +666,24 @@
           <button class="writing-primary destructive-button" type="submit">작품 삭제</button>
         </div>
       </div>
+    </form>
+  </dialog>
+  <dialog class="editor-dialog" id="delete-scene-dialog" aria-labelledby="delete-scene-title" aria-describedby="delete-scene-message">
+    <form class="editor-dialog-body" method="dialog">
+      <h2 id="delete-scene-title">장면 삭제</h2>
+      <p class="field-hint" id="delete-scene-message"></p>
+      <p class="field-hint" id="delete-scene-status" role="alert" hidden></p>
+      <div class="compact-actions editor-dialog-actions">
+        <button class="quiet-button" type="submit" value="cancel" autofocus>취소</button>
+        <button class="writing-primary destructive-button" type="submit" value="delete">장면 삭제</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog class="editor-dialog" id="scene-insertion-dialog" aria-labelledby="scene-insertion-title">
+    <form class="editor-dialog-body" method="dialog">
+      <h2 id="scene-insertion-title">새 장면을 넣을 위치</h2>
+      <div class="scene-insertion-options" id="scene-insertion-options"></div>
+      <button class="quiet-button" type="submit">취소</button>
     </form>
   </dialog>
 </body>

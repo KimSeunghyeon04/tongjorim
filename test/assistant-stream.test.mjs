@@ -9,6 +9,7 @@ import { Readable } from 'node:stream'
 import { gzipSync } from 'node:zlib'
 import test from 'node:test'
 import { requestCompletion } from '../public/completion.js'
+import { memoryRequest, updateManuscriptMemory } from '../public/manuscript-memory.mjs'
 import { requestAssistantReply } from '../public/writing-assistant.mjs'
 import { readWorkspace } from '../public/writing-workspace.mjs'
 import { createTongjorimServer } from '../server-app.mjs'
@@ -151,6 +152,33 @@ function checkAssistantCall({ url, headers, body }, kind) {
   assert.deepEqual(body.provider, routedProvider)
   assert.equal(JSON.parse(body.messages.at(-1).content).request, writerRequest)
 }
+
+test('원고 메모 갱신은 작품의 출력 한도를 보내고 잘린 응답은 저장하지 않는다', async t => {
+  const reply = JSON.stringify({ summary: '나래는 등대에 도착했다.', knowledgeChanges: [] })
+  const { appFetch, calls } = await startApp(t, [completion(reply), sse([
+    { model, choices: [{ delta: { content: reply }, finish_reason: 'length' }] },
+  ])])
+  const project = { id: 'memory', model: 'qa/write', memoryModel: model, maxTokens: 321, title: '등대',
+    manuscript: '나래는 등대에 도착했다.' }
+  const invalid = await appFetch('/api/memory', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...memoryRequest(project), maxTokens: 0 }),
+  })
+  assert.equal(invalid.status, 400)
+  assert.equal(calls.length, 0)
+
+  const checkpoint = memory => { project.manuscriptMemory = memory }
+  const update = () => updateManuscriptMemory(project, project.manuscript, AbortSignal.timeout(5000), checkpoint, () => {})
+  await update()
+  const saved = project.manuscriptMemory
+  assert.equal(saved.text, '나래는 등대에 도착했다.')
+
+  project.maxTokens = 17
+  project.manuscript += '\n\n등대 관리인이 문을 잠갔다.'
+  await assert.rejects(update, /출력 토큰 한도에 도달/)
+  assert.equal(project.manuscriptMemory, saved)
+  assert.deepEqual(calls.map(({ body }) => [body.model, body.max_completion_tokens]), [[model, 321], [model, 17]])
+})
 
 test('로어북과 메모의 최초 요청과 형식 교정이 각각 엄격한 스키마를 전송한다', async t => {
   for (const kind of ['lore', 'note']) {
@@ -417,20 +445,48 @@ test('수정 요청 미리보기와 실제 생성이 같은 가지의 전체 dif
   assert.match(request.messages[0].content, /과거 지시는 이전 결정을 이해하거나 최신 지시가 되돌리기를 요청할 때만 참고/)
 })
 
+test('빈 장면을 쓸 때 의도한 앞뒤 원고를 미리보기와 실제 생성에 같은 형태로 보낸다', async t => {
+  const { appFetch, calls } = await startApp(t, [completion('지연이 계단에 앉았다.')])
+  const sceneRevision = { text: '', direction: '', mode: 'fill', following: '곧 지연이 일어났다.' }
+  const body = {
+    model, maxTokens: 512, references: ['manuscript'],
+    draft: { projectTitle: '계단', direction: '', manuscript: '계단에서 발소리가 났다.' }, sceneRevision,
+  }
+  const post = input => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) })
+  const invalid = await appFetch('/api/write/preview', post({ ...body, sceneRevision: { ...sceneRevision, text: '기존 본문' } }))
+  assert.equal(invalid.status, 400)
+  await invalid.text()
+  const preview = await appFetch('/api/write/preview', post(body))
+  assert.equal(preview.status, 200)
+  assert.equal(calls.length, 0)
+  let text = ''
+  await requestCompletion('/api/write', body, { signal: AbortSignal.timeout(5000), onText: chunk => { text += chunk } })
+  assert.equal(text, '지연이 계단에 앉았다.')
+  assert.equal(calls.length, 1)
+  const request = calls[0].body
+  assert.deepEqual(request, await preview.json())
+  assert.match(request.messages[0].content, /선택된 빈 장면에 들어갈 새 장면/)
+  assert.deepEqual(JSON.parse(request.messages[1].content), {
+    projectTitle: '계단', direction: '', manuscript: '계단에서 발소리가 났다.', sceneRevision,
+  })
+})
+
 test('32 MiB를 넘는 작업공간을 압축 저장하고 응답 유실 뒤에도 동시 저장 규칙을 적용한다', async t => {
   const { appFetch } = await startApp(t, [])
   const workspace = readWorkspace(null)
   const project = workspace.projects[0]
   const body = '창밖에 비가 내렸다. '.repeat(320)
-  project.manuscript = Array(830).fill(body).join('\n\n')
-  project.savedScenes = Array.from({ length: 830 }, (_, index) => ({
-    id: `scene-${index}`, title: '비가 내리는 밤', range: { start: index * (body.length + 2), end: index * (body.length + 2) + body.length },
-    accepted: 0, versions: [
+  const scenes = Array.from({ length: 830 }, (_, index) => ({
+    id: `scene-${index}`, text: body, origins: [], accepted: 0, versions: [
       { text: body, direction: '비 오는 밤을 묘사해 줘.', parent: null },
       { text: '비'.repeat(4000), direction: '장면을 길게 써 줘.', parent: 0 },
       { text: '바람'.repeat(2000), direction: '바람도 불게 해 줘.', parent: 1 },
     ],
   }))
+  project.sceneDocument = {
+    order: scenes.map(({ id }, index) => ({ id, before: index ? '\n\n' : '' })),
+    scenes: Object.fromEntries(scenes.map(scene => [scene.id, scene])), past: [], future: [],
+  }
   const attempt = randomUUID()
   const snapshot = JSON.stringify(workspace)
   const encode = (revision, snapshot) => gzipSync(JSON.stringify({ revision, snapshot, attempt }))

@@ -1,6 +1,7 @@
 import { hasSceneNote, normalizeProject, referenceSettingsFor, validProject, validProjectBase } from './project-files.mjs'
 import { searchFor } from './retrieval.mjs'
 import { appendParagraphs, freeModel, normalizeLineEndings, optionalProjectModels } from './writing-config.mjs'
+import { attachSceneDocument, createSceneDocument } from './scene-document.mjs'
 
 // Keep the same storage key so older tabs detect a workspace change before saving.
 export const storageKey = 'relay.writing.v1'
@@ -13,20 +14,19 @@ export const currentProjectOf = workspace =>
   workspace.projects.find(project => project.id === workspace.activeProjectId) ?? workspace.projects[0]
 export const projectName = project => project.title.trim() || '제목 없는 소설'
 
-export function makeProject(title = '제목 없는 소설') {
-  return {
+export function makeProject(title = '제목 없는 소설', text = '') {
+  return attachSceneDocument({
     id: crypto.randomUUID(), title, synopsis: '',
-    model: freeModel.id, maxTokens: 2048, manuscript: '', direction: '',
-  }
+    model: freeModel.id, maxTokens: 2048, sceneDocument: createSceneDocument(text), direction: '',
+  })
 }
 
 function sampleWorkspace() {
-  const sample = makeProject('안개 항로 (예시)')
-  sample.manuscript = [
+  const sample = makeProject('안개 항로 (예시)', [
     '안개가 걷히기도 전에 항구의 시계가 다섯 번 울었다. 서윤은 표를 쥔 손을 코트 주머니에 넣었다. 선착장 끝에는 행선지를 적지 않은 배가 한 척 떠 있었다.',
     '선장이 그녀의 표를 받더니 표 뒷면을 들여다보았다. 서윤도 그제야 거기에 낯선 글씨가 있다는 걸 알았다.',
     '「돌아오는 편은 한 사람만.」',
-  ].join('\n\n')
+  ].join('\n\n'))
   sample.direction = '선장은 이 문장을 이미 알고 있다. 서로 모르는 척하는 두 사람의 짧은 대화로 장면을 이어간다.'
   sample.synopsis = '항해 지도에 없는 섬에서 편지가 도착한다. 실종된 오빠가 보낸 편지라고 믿는 서윤은 새벽 여객선에 오른다.'
   sample.lorebook = [
@@ -37,7 +37,7 @@ function sampleWorkspace() {
     { id: 'sample-setting', kind: 'world', name: '배경과 시점', aliases: [], priority: 0, always: true,
       description: '늦가을 항구. 서윤의 시점에서 과거형으로 서술한다.' },
   ]
-  return { version: workspaceVersion, activeProjectId: sample.id, projects: [sample] }
+  return { version: workspaceVersion, activeProjectId: sample.id, projects: [normalizeProject(sample)] }
 }
 
 function mergeProjectScenes({ scenes, activeSceneId, ...project }) {

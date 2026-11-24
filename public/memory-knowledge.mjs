@@ -1,5 +1,5 @@
 import { numberedPassages, passageInput, selectEvidence } from './numbered-passages.mjs'
-import { completionPayload, defaultMemoryPrompt, effectiveSystemPrompt, memoryOutputLimit, writingFields } from './writing-config.mjs'
+import { completionPayload, defaultMemoryPrompt, effectiveSystemPrompt, writingFields } from './writing-config.mjs'
 
 const limited = (value, length) => typeof value === 'string' && Boolean(value.trim()) && value.length <= length
 const knowledgePassages = excerpt => numberedPassages(excerpt, { sentences: true })
@@ -24,9 +24,9 @@ export function memoryWithKnowledge(summary, knowledge) {
   return [summary, ['## 인물이 아는 사실', ...lines].join('\n')].filter(Boolean).join('\n\n')
 }
 
-export function manuscriptMemoryPayload({ model, projectTitle, memory, excerpt, systemPrompt, knowledge }) {
+export function manuscriptMemoryPayload({ model, maxTokens, projectTitle, memory, excerpt, systemPrompt, knowledge }) {
   const prompt = effectiveSystemPrompt(systemPrompt, defaultMemoryPrompt)
-  if (knowledge === undefined) return completionPayload(model, memoryOutputLimit, prompt, { projectTitle, memory, excerpt })
+  if (knowledge === undefined) return completionPayload(model, maxTokens, prompt, { projectTitle, memory, excerpt })
   const format = [
     '이 요청의 응답은 마크다운 없이 JSON 객체 하나의 텍스트입니다. {"summary":"요약","knowledgeChanges":[]} 형식을 쓰고, 앞의 작성 지시는 summary에 적용하세요.',
     'knowledge는 이전까지 확인한 인물 지식 목록입니다. 미해결 단서, 비밀, 오해처럼 누가 알고 모르는지가 이후 장면에 영향을 주는 사실만 기록하세요. 등장인물의 추측을 확인된 지식으로 올리지 마세요.',
@@ -38,7 +38,7 @@ export function manuscriptMemoryPayload({ model, projectTitle, memory, excerpt, 
     '근거는 excerpt의 번호만 사용하세요. previousMemo가 제공된 경우에는 이전 메모가 명시한 지식을 id=0, source="memory", previousMemo의 번호로 옮길 수 있습니다. 기존 id의 변경에는 이번 excerpt의 근거가 필요합니다.',
     '각 fact는 300자 이내, 이름은 100자 이내로 기록하세요. 기존 지식과 요약을 합친 메모가 6,000자를 넘지 않도록 summary를 압축하세요.',
   ].join('\n')
-  return completionPayload(model, memoryOutputLimit, [prompt, format].join('\n\n'), {
+  return completionPayload(model, maxTokens, [prompt, format].join('\n\n'), {
     projectTitle, memory, excerpt: passageInput(knowledgePassages(excerpt)),
     knowledge: (knowledge ?? []).map((item, index) => ({ id: index + 1, ...item })),
     ...(knowledge === null && memory ? { previousMemo: passageInput(numberedPassages(memory)) } : {}),

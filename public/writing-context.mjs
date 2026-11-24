@@ -60,7 +60,8 @@ export function planWritingContext(project, references, model, limits, addedLore
   let recentReduced = false
   let recentWarning = ''
   if (references.includes('manuscript')) {
-    const requested = Math.min(manuscript.length, recentLimit - (revision?.following?.length ?? 0))
+    const requested = Math.min(manuscript.length, sceneRevision?.precedingLimit ?? Infinity,
+      recentLimit - (revision?.following?.length ?? 0))
     const full = suffixAt(manuscript, requested)
     const suffix = fitSuffix(full, manuscript => fits({ ...draft, manuscript }))
     if (revision) draft.manuscript = suffix

@@ -1,6 +1,7 @@
 import { chunkManuscript, loreKinds, loreLimits, paragraphRanges } from './retrieval.mjs'
 import { validModelOptionProfiles } from './model-options.mjs'
 import { normalizeSavedScenes, validSavedScenes } from './manuscript-scenes.mjs'
+import { attachSceneDocument, projectSceneDocument, validSceneDocument } from './scene-document.mjs'
 import { memoryWithKnowledge, validKnowledge } from './memory-knowledge.mjs'
 import { validSceneReviews } from './scene-review.mjs'
 import { defaultReferences, maxSourceLimits, normalizeLineEndings, noteKinds, optionalProjectModels, systemPromptLimit, validModelId, validSourceLimit, validWritingTokenLimit, writingFields } from './writing-config.mjs'
@@ -18,7 +19,7 @@ const legacyNoteLimit = 12_000
 const legacyReferences = ['synopsis', ...Object.keys(legacyNoteKinds), ...defaultReferences]
 const projectKeys = [
   'title', 'synopsis', 'model', 'maxTokens', 'manuscript', 'direction', 'sceneLength', 'legacySceneNotes',
-  'manuscriptMemory', 'autoMemory', 'lorebook', 'search', 'sourceLimits', 'modelOptions', 'savedScenes', 'sceneReviews',
+  'manuscriptMemory', 'autoMemory', 'lorebook', 'search', 'sourceLimits', 'modelOptions', 'savedScenes', 'sceneReviews', 'sceneDocument',
   ...optionalProjectModels, ...promptKeys,
 ]
 const loreCardFieldKeys = ['name', 'aliases', 'kind', 'description', 'priority', 'always']
@@ -86,7 +87,11 @@ export function validProjectBase(project) {
 }
 
 export function validProject(project) {
-  if (!validProjectBase(project) || typeof project.manuscript !== 'string' || typeof project.direction !== 'string') return false
+  if (!validProjectBase(project) || typeof project.direction !== 'string') return false
+  const canonical = project.sceneDocument !== undefined
+  if (canonical && !validSceneDocument(project.sceneDocument)) return false
+  const manuscript = canonical ? projectSceneDocument(project.sceneDocument).manuscript : project.manuscript
+  if (typeof manuscript !== 'string') return false
   return optional(project.sceneLength, value => limited(value, writingFields.sceneLength)) &&
     optional(project.autoMemory, validBoolean) && optional(project.lorebook, validLore) &&
     optional(project.modelOptions, validModelOptionProfiles) &&
@@ -95,13 +100,13 @@ export function validProject(project) {
     optionalProjectModels.every(key => optional(project[key], validModelId)) &&
     optional(project.search, value => record(value) && validBoolean(value.enabled) && validModelId(value.model)) &&
     optional(project.legacySceneNotes, notes => Array.isArray(notes) && notes.every(hasSceneNote)) &&
-    optional(project.savedScenes, scenes => validSavedScenes(scenes, project.manuscript)) &&
+    (canonical || optional(project.savedScenes, scenes => validSavedScenes(scenes, manuscript))) &&
     optional(project.sceneReviews, validSceneReviews) &&
     optional(project.manuscriptMemory, memo => record(memo) && limited(memo.text, writingFields.manuscriptMemory) &&
       optional(memo.knowledge, knowledge => validKnowledge(knowledge) &&
         memoryWithKnowledge(memo.text, knowledge).length <= writingFields.manuscriptMemory) &&
       validBoolean(memo.stale) && Number.isSafeInteger(memo.through) && memo.through >= 0 &&
-      (memo.stale || memo.through <= project.manuscript.length))
+      (memo.stale || memo.through <= manuscript.length))
 }
 
 function noteSections(text) {
@@ -148,8 +153,12 @@ function migrateProjectNotes(project) {
 }
 
 export function normalizeProject(project) {
+  if (project.sceneDocument) {
+    migrateProjectNotes(project)
+    return attachSceneDocument(project)
+  }
   const manuscript = normalizeLineEndings(project.manuscript)
-  if (project.savedScenes) project.savedScenes = normalizeSavedScenes(project.savedScenes, project.manuscript, manuscript)
+  project.savedScenes = normalizeSavedScenes(project.savedScenes, project.manuscript, manuscript)
   if (manuscript !== project.manuscript) {
     const memory = project.manuscriptMemory
     if (memory && !memory.stale) {
@@ -173,7 +182,8 @@ export function normalizeProject(project) {
 }
 
 function clean(source, keys) {
-  const result = structuredClone(pick(source, keys))
+  const storedKeys = source.sceneDocument ? keys.filter(key => key !== 'manuscript' && key !== 'savedScenes') : keys
+  const result = structuredClone(pick(source, storedKeys))
   if (result.lorebook) result.lorebook = result.lorebook.map(card => pick(card, cardKeys))
   if (result.references) result.references = currentReferences(result.references)
   if (result.search) result.search = pick(result.search, ['enabled', 'model'])
@@ -214,7 +224,8 @@ export function readProject(text) {
   const file = readVersion(text, 'relay-project')
   const data = { ...file.project, id: crypto.randomUUID() }
   if (!validProject(data)) throw new Error('원고나 작품 설정의 형식이 올바르지 않아요.')
-  return { ...clean(normalizeProject(data), projectKeys), id: data.id }
+  const project = { ...clean(normalizeProject(data), projectKeys), id: data.id }
+  return project.sceneDocument ? attachSceneDocument(project) : project
 }
 
 export function exportPack(project, { lorebook, prompts }) {

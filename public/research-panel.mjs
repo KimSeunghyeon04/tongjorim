@@ -285,8 +285,8 @@ export function setupResearch({ get, currentProject, saveWorkspace, onChange, go
     return { ...plan.finish(ranked()), status, semanticPending, semanticFailed }
   }
 
-  function preview(project, model) {
-    return preparedPlan(project, plansFor(project, model))
+  function preview(project, model, { source = project, sceneRevision } = {}) {
+    return preparedPlan(source, plansFor(source, model, undefined, { cards: addedLoreCards(project), sceneRevision }))
   }
 
   async function prepare(project, model, signal, { retry = false, source = project, sceneRevision, assertCurrent } = {}) {

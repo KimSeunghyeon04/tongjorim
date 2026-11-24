@@ -1,3 +1,4 @@
+import { editSceneDocument } from '../public/scene-document.mjs'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { embeddingRouteKey, openRouterOptions, validModelOptions, withModelOptions } from '../public/model-options.mjs'
@@ -72,7 +73,7 @@ test('작품 백업과 열린 집필실에 상세설정을 복원하면서 편�
   assert.deepEqual(restored.modelOptions, { [model]: options })
   assert.notEqual(restored.id, project.id)
 
-  project.manuscript = '아직 저장하지 않은 원고'
+  project.sceneDocument = editSceneDocument(project.sceneDocument, project.savedScenes[0].id, '아직 저장하지 않은 원고')
   const after = JSON.stringify(next)
   assert.deepEqual(mergeModelSettings(workspace, before, after), new Set([project.id]))
   assert.equal(workspace.projects[0], project)

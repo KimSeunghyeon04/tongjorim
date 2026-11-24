@@ -33,7 +33,6 @@ export const assistantRepairTextLimit = 32_000
 export const noteDraftActions = ['append', 'replace']
 export const assistantHistoryTurns = 6
 export const memoryExcerptLimit = 12000
-export const memoryOutputLimit = 4096
 export const defaultRevisionPrompt = '선택한 문단을 다듬는 소설 편집자입니다. 서술 시점, 시제, 인물 관계와 원래 의미를 유지하고 작가의 퇴고 지시를 적용하세요. 원고에 그대로 교체할 수정된 문단만 출력하세요.'
 export const defaultLoreSystemPrompt = '소설의 로어북 카드를 작성하는 편집 도우미입니다. 줄거리와 기존 로어북 설정을 유지하며 작가와 개선 방향을 의논하세요.'
 
@@ -73,13 +72,22 @@ export function completionPayload(model, maxTokens, systemPrompt, context) {
   }
 }
 
-export function sceneRevisionContext({ text, direction, following, history }) {
-  return { text, direction, ...(following ? { following } : {}), ...(history?.length ? { history } : {}) }
+export function sceneRevisionContext({ text, direction, following, history, mode }) {
+  return { text, direction, ...(mode ? { mode } : {}), ...(following ? { following } : {}), ...(history?.length ? { history } : {}) }
 }
 
 export function continuationPayload(model, maxTokens, systemPrompt, context, sceneRevision) {
   const prompt = effectiveSystemPrompt(systemPrompt, defaultSystemPrompt)
   if (!sceneRevision) return completionPayload(model, maxTokens, prompt, context)
+  if (sceneRevision.mode === 'fill') {
+    const fillPrompt = [
+      prompt,
+      '선택된 빈 장면에 들어갈 새 장면을 작성하세요. sceneRevision.direction의 장면 지시를 우선하세요.',
+      '기존 원고(manuscript)는 앞 문맥이며 sceneRevision.following은 뒤에 이어지는 원고입니다.',
+      '앞뒤와 이어지도록 새 장면 본문만 출력하세요.',
+    ].join('\n')
+    return completionPayload(model, maxTokens, fillPrompt, { ...context, sceneRevision })
+  }
   const revisionPrompt = [
     prompt,
     '이번 작업은 새 장면 생성이 아니라 sceneRevision.text에 있는 이어쓰기 초안 전체의 수정입니다.',

@@ -187,13 +187,11 @@ function formatDraftDiff(before, after) {
 }
 
 export function sceneRevisionHistory(versions, selected) {
-  const history = []
-  for (const index of sceneVersionPath(versions, selected)) {
+  const [root, ...path] = [...sceneVersionPath(versions, selected)].reverse()
+  return path.map(index => {
     const { text, direction, parent } = versions[index]
-    if (parent === null) break
-    history.push({ fromVersion: parent + 1, toVersion: index + 1, direction, diff: formatDraftDiff(versions[parent].text, text) })
-  }
-  return history.reverse()
+    return { fromVersion: parent - root + 1, toVersion: index - root + 1, direction, diff: formatDraftDiff(versions[parent].text, text) }
+  })
 }
 
 function removedTextToggle(removed, label) {

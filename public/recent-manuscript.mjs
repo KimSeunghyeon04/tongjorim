@@ -1,5 +1,5 @@
 import { paragraphRanges } from './retrieval.mjs'
-import { savedScenesInManuscriptOrder } from './manuscript-scenes.mjs'
+import { savedScenesInManuscriptOrder, sceneRange } from './manuscript-scenes.mjs'
 
 // Registered ranges take precedence over paragraph breaks, including inside a paragraph.
 function unitsFor({ manuscript, savedScenes = [] }) {
@@ -11,7 +11,8 @@ function unitsFor({ manuscript, savedScenes = [] }) {
     }
   }
   for (const scene of savedScenesInManuscriptOrder(savedScenes)) {
-    if (!scene.range) continue
+    if (!scene.range || (scene.versions?.length === 1 && scene.versions[0].source === 'implicit') ||
+        !sceneRange(manuscript, scene.range.start, scene.range.end)) continue
     addParagraphs(scene.range.start)
     units.push({ start: scene.range.start, scene: true })
     through = scene.range.end

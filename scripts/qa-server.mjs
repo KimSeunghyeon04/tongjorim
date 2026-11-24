@@ -89,7 +89,8 @@ globalThis.fetch = async (url, options) => {
       ...candidates.map(candidate => {
         const card = cards.find(item => item.name === candidate.name)
         const unchanged = card?.description.some(passage => passage.text === candidate.fact)
-        return ['lore_' + candidate.id, { scope: 'standing_rule', card: unchanged ? -1 : card?.id ?? 0, replaces: card && !unchanged ? 1 : 0 }]
+        return ['lore_' + candidate.id, { scope: 'standing_rule', card: unchanged ? -1 : card?.id ?? 0,
+          replaces: card && !unchanged ? 1 : 0, affectsContinuity: !unchanged }]
       }),
     ]))
   } else if (body.model === 'qa/plan' || body.model === 'qa/plan-repair') {

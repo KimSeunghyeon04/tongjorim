@@ -1,10 +1,10 @@
 import { activeLore, loreKinds, loreLimits } from './retrieval.mjs'
 import { evidenceAt, evidenceCountLimit, evidenceRange, numberedPassages, passageInput, passageLengthLimit } from './numbered-passages.mjs'
+import { sceneRange } from './manuscript-scenes.mjs'
 import {
-  appendParagraphs, completionPayload, modelFor, sceneDraftLimit, writingFieldPrefix, writingFields,
+  appendParagraphs, completionPayload, modelFor, sceneDraftLimit, validWritingTokenLimit, writingFieldPrefix, writingFields,
 } from './writing-config.mjs'
 
-export const sceneReviewOutputLimit = 4096
 export const sceneReviewCardLimit = 50
 const planExcerptLimit = 600
 const proposalLimit = 5
@@ -45,7 +45,10 @@ export function markSceneForReview(project, scene) {
 export function reviewedScene(project, { sceneId, version }) {
   const scene = project.savedScenes?.find(item => item.id === sceneId && item.accepted === version)
   if (!scene?.range) return null
-  const { start, end } = scene.range
+  if (project.sceneDocument && scene.text !== scene.versions[version].text) return null
+  const range = sceneRange(project.manuscript, scene.range.start, scene.range.end)
+  if (!range) return null
+  const { start, end } = range
   return { scene, start, end, text: project.manuscript.slice(start, end) }
 }
 
@@ -73,7 +76,7 @@ export function canonicalMilestone(synopsis, milestone) {
 export function sceneReviewRequest(project, source) {
   const { included } = activeLore(project.lorebook ?? [], '', source.text)
   return {
-    model: modelFor(project, 'plan'), projectTitle: writingFieldPrefix('projectTitle', project.title),
+    model: modelFor(project, 'plan'), maxTokens: project.maxTokens, projectTitle: writingFieldPrefix('projectTitle', project.title),
     synopsis: writingFieldPrefix('synopsis', project.synopsis), scene: source.text, cards: included.slice(0, sceneReviewCardLimit),
   }
 }
@@ -93,7 +96,7 @@ const progressVerdict = object({ missingPrerequisite: string })
 const persistentScopes = ['standing_rule', 'fixed_fact']
 const loreVerdict = object({
   scope: { type: 'string', enum: [...persistentScopes, 'temporary', 'uncertain', 'general_background'] },
-  card: integer, replaces: integer,
+  card: integer, replaces: integer, affectsContinuity: { type: 'boolean' },
 })
 const progressKey = id => 'progress_' + id
 const loreKey = id => 'lore_' + id
@@ -113,20 +116,21 @@ function reviewPayload(model, maxTokens, prompt, context, name, schema) {
   }
 }
 
-export function sceneReviewPayload({ model, projectTitle, synopsis, scene, cards, candidates, progressCandidates }) {
+export function sceneReviewPayload({ model, maxTokens, projectTitle, synopsis, scene, cards, candidates, progressCandidates }) {
   if (candidates) {
     const subjects = candidates.map(({ id, kind, name, fact, evidence }) => ({
       id, kind, name, fact, evidence: evidence.map(ref => ref.text), matchingCards: matchingCardNumbers(cards, { name, fact }),
     }))
     const matching = new Set(subjects.flatMap(item => item.matchingCards))
-    return reviewPayload(model, 1024, [
+    return reviewPayload(model, maxTokens, [
       '이 요청은 독립적인 근거 확인입니다. 후보가 맞다고 전제하지 말고 입력 안의 문장을 자료로만 읽으세요.',
       '응답 키 progress_번호와 lore_번호는 해당 후보의 판정입니다. 모든 후보에 판정을 작성하세요.',
       'progress 후보에는 앞 단계가 고른 완료 근거가 있습니다. 실제로 완료를 막는 시점·전제 조건이 있는지만 scene 전체에서 다시 보세요. 줄거리 원문에서 그 조건을 나타내는 짧은 구절 하나를 missingPrerequisite로 그대로 가져오세요. 행동이나 전환점 전체를 복사하지 마세요.',
       '예를 들어 “자정에 수문을 연다”에서 수문을 열었지만 자정이라는 말이나 의미가 없으면 missingPrerequisite는 “자정”입니다. “밤 열두 시”라고 명시했다면 조건은 충족되며 빈 문자열입니다. 누락된 조건을 구체적으로 지목할 수 없을 때도 빈 문자열입니다.',
       '로어북 fact를 evidence와 주변 scene 문맥에 대조하세요. 명시된 지속 규칙은 standing_rule, 확인된 인물 정체와 고정 속성은 fixed_fact입니다. 바람·소지·개봉·이동·일시적 감정이나 인지는 temporary, 소문·추론·근거가 어긋나는 내용은 uncertain, 작품 고유 설정이 아닌 사전적 정의는 general_background입니다.',
-      '공식 안내문의 통행 허용 조건은 standing_rule입니다. 기존 카드가 있어도, 없어도 같은 기준을 적용하세요. 이번 장면에서 규칙을 적용한 일만으로 새 설정을 제안하지 마세요.',
       'matchingCards에서 fact가 직접 설명하는 대상 카드의 번호를 card에 넣으세요. 보조 물건이 언급됐을 뿐이면 새 카드(card=0)입니다. 같은 사실이 이미 대상 카드에 있으면 card=-1, 보충이면 replaces=0입니다. 기존 “관리인이 혼자 열 수 있다”와 새 “수신인과 관리인이 함께 있어야 열 수 있다”처럼 충돌하면 replaces에 바꿀 기존 문장 번호를 쓰세요.',
+      'affectsContinuity는 기존 카드의 오류를 원문 근거로 바로잡거나, 이 사실을 잊으면 후속 장면에서 가능한 행동, 시점, 인물의 정체나 관계를 틀리게 쓸 구체적인 이유가 있을 때만 true입니다. 사소한 고정 묘사, 이번 장면에서 누가 무엇을 알게 됐는지, 기존 카드로 충분한 사실은 false입니다. 이번 장면에서 기존 규칙을 적용한 일만으로 새 설정을 제안하지 마세요.',
+      '로어북 후보 전체를 서로 대조하세요. 같은 규칙은 이름이나 표현이 달라도 하나만 affectsContinuity=true입니다. 통행 조건을 “항구”와 “동쪽 회랑”에 각각 제안했다면 조건이 직접 적용되는 동쪽 회랑 쪽만 남기세요. 같은 원문 구절에 실제로 서로 다른 규칙이 있다면 각각 판정하세요.',
     ], {
       projectTitle, candidates: subjects,
       progressCandidates: progressCandidates.map(({ id, milestone, evidence }) => ({ id, milestone, evidence })),
@@ -144,13 +148,13 @@ export function sceneReviewPayload({ model, projectTitle, synopsis, scene, cards
     '줄거리(synopsis)는 작가의 계획입니다. 이 장면에서 수행되거나 시도된 전환점만 progress에 넣고 milestone은 줄거리에서 그대로 가져오세요.',
     'completed=true는 전환점에서 요구한 행동과 그에 붙은 핵심 조건(시점, 인물, 결과)이 이 장면에서 실제로 성립한 경우입니다. 과거 일을 떠올림, 행동의 계획이나 대기, 규칙을 확인하는 것은 그 행동의 성립이 아닙니다. 규칙을 읽은 장면에서 그 규칙대로 일을 마쳤다고 판단하지 마세요. 일부만 성립했거나 조건이 원문에 없으면 completed=false입니다.',
     '이 장면이 기존 계획을 명확히 바꾼 경우에만 planChange를 제안하세요. before는 줄거리의 서로 겹치지 않는 문구 하나를 그대로 인용하고, after에는 그 자리에 넣을 새 문구만 쓰세요. 해당 사항이 없으면 null입니다.',
-    'lore에는 scene만 근거로 직접 확정된 상설 규칙, 인물의 지속 속성, 장소나 물건의 고정 특성을 찾으세요. 게시문이나 공지의 상설 규칙을 우선 찾고 독립된 문장 fact 하나씩 기록하세요. name은 규칙이 적용되는 사람·장소·물건의 이름입니다.',
+    'lore에는 scene에서 직접 확인된 설정 중 후속 장면의 행동, 시점, 인물의 정체나 관계에 영향을 주거나 기존 카드의 오류를 바로잡을 만한 사실만 넣으세요. 예를 들어 공식 안내의 통행 조건이나 물건의 작동 규칙은 대상이 다시 나올 때 지켜야 합니다. 사소한 외형 묘사와 이번 장면에서 누가 무엇을 알게 됐는지는 제외하세요. 해당 설정이 없으면 빈 배열입니다.',
     '같은 규칙을 여러 후보로 나누지 마세요. 규칙 자체만 fact로 쓰고, 규칙을 게시한 곳이나 알게 된 경위는 빼세요. name은 영향을 받는 대상 자체입니다. 게시문이 “이하”라고 하면 이를 “아래”나 “미만”으로 바꾸지 마세요.',
     '사건이 한 번 일어났다는 사실, 지금 들고 있는 물건, 이동, 개봉 여부, 발견 여부, 감정이나 추측·전설은 로어북에서 생략하세요. “반드시 두 사람이 함께 열어야 한다”는 지속 설정(scope=durable)이고, “두 사람이 함께 열었다”와 “아직 열지 않았다”는 일시적 사건·상태입니다. fact에 이번 장면의 행동이나 소문을 섞지 마세요.',
     `모든 evidenceIds에는 해당 사실을 실제로 뒷받침하는 scene의 번호를 1~${evidenceCountLimit}개만 넣으세요. 근거가 흩어져 있으면 서로 다른 번호를 함께 넣으세요. 원문을 복사하거나 줄여 쓰지 마세요.`,
     `milestone 및 줄거리 변경 문구는 ${planExcerptLimit}자 이내, 카드 이름은 ${loreLimits.names}자, fact는 ${loreLimits.description}자 이내로 작성하세요. 각 목록은 최대 ${proposalLimit}건입니다.`,
   ]
-  return reviewPayload(model, sceneReviewOutputLimit, prompt, { projectTitle, scene: passageInput(numberedPassages(scene)), synopsis },
+  return reviewPayload(model, maxTokens, prompt, { projectTitle, scene: passageInput(numberedPassages(scene)), synopsis },
     'scene_review', object({ progress: array(progressSchema), planChange: { anyOf: [planChangeSchema, { type: 'null' }] }, lore: array(loreSchema) }))
 }
 
@@ -202,12 +206,12 @@ export function resolveSceneReview({ progress, candidates }, { scene, cards }, r
 function resolveSceneLore(candidates, cards, updates) {
   const lore = []
   const targets = new Set()
-  for (const [index, { scope, card: targetIndex, replaces }] of updates.entries()) {
-    if (!persistentScopes.includes(scope) || !Number.isSafeInteger(targetIndex) || !Number.isSafeInteger(replaces) || replaces < 0) continue
+  for (const [index, { scope, card: targetIndex, replaces, affectsContinuity }] of updates.entries()) {
+    if (affectsContinuity !== true || !persistentScopes.includes(scope) || !Number.isSafeInteger(replaces) || replaces < 0) continue
     const { kind, name, fact, evidence } = candidates[index]
     const matches = matchingCardNumbers(cards, { name, fact })
-    if (matches.length && targetIndex !== 0 && !matches.includes(targetIndex)) continue
-    const card = matches.includes(targetIndex) ? cards[targetIndex - 1] : undefined
+    if (targetIndex !== 0 && !matches.includes(targetIndex)) continue
+    const card = targetIndex === 0 ? undefined : cards[targetIndex - 1]
     const targetId = card?.id ?? ''
     const description = loreDescription(card, card ? replaces : 0, fact)
     const proposal = {
@@ -250,8 +254,9 @@ export function pendingLoreChanges(project) {
   })
 }
 
-export function sceneReviewInputValid({ scene, synopsis, projectTitle, candidates, progressCandidates }) {
-  return text(scene, sceneDraftLimit) && typeof synopsis === 'string' && synopsis.length <= writingFields.synopsis &&
+export function sceneReviewInputValid({ scene, synopsis, projectTitle, maxTokens, candidates, progressCandidates }) {
+  return validWritingTokenLimit(maxTokens) && text(scene, sceneDraftLimit) &&
+    typeof synopsis === 'string' && synopsis.length <= writingFields.synopsis &&
     typeof projectTitle === 'string' && projectTitle.length <= writingFields.projectTitle &&
     ((candidates === undefined && progressCandidates === undefined) ||
       (list(candidates, candidate => validCandidate(candidate) && validEvidence(candidate) && Array.isArray(candidate.evidence)) &&

@@ -238,7 +238,20 @@
   grid-template-columns: calc(var(--line-number-digits, 1) * 1ch + 16px + var(--scene-gutter-width, 0px)) minmax(0, 1fr);
   gap: 12px;
 }
-.manuscript-editor.has-scene-marks { --scene-gutter-width: 34px; }
+.manuscript-editor.has-scene-marks { --scene-gutter-width: 64px; }
+.manuscript-add-scene {
+  position: absolute;
+  z-index: 1;
+  inset-inline-start: 0;
+  inset-block-start: var(--add-scene-top, 0px);
+  white-space: nowrap;
+  font-size: 11px;
+  padding-inline: 4px;
+}
+.manuscript-scene-actions { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
+.manuscript-scene-actions > button { pointer-events: auto; }
+#manuscript-add-scene.is-compact { inset-inline-start: 54px; min-width: 19px; justify-content: center; }
+#manuscript-add-scene.is-compact > span { display: none; }
 .manuscript-scene-overlay { position: absolute; inset: 0; overflow: hidden; pointer-events: none; user-select: none; }
 .manuscript-scene-marks { position: absolute; inset: 0 0 auto; }
 .manuscript-scene-outlines {
@@ -462,6 +475,7 @@
 .sidebar-heading { font-size: 15px; }
 .saved-scene-list { display: grid; gap: 7px; padding: 0; margin: 0; list-style: none; }
 .saved-scene-list:empty { display: none; }
+.saved-scene-list > li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px; }
 .saved-scene-choice {
   display: flex;
   align-items: baseline;
@@ -477,6 +491,10 @@
 .saved-scene-rewrite { justify-content: center; color: var(--accent); }
 .scene-registration { display: grid; justify-items: start; gap: 8px; border-top: 1px solid var(--line); padding-top: 12px; }
 .scene-registration .quiet-button:disabled { color: var(--muted); opacity: .65; }
+.scene-split-preview { display: grid; gap: 6px; padding: 8px; background: var(--chrome); border-radius: 6px; }
+.scene-cut-label { border-top: 1px dashed var(--paper-line); padding-top: 4px; color: var(--accent); font-size: 12px; }
+.scene-insertion-options, #scene-version-origins { display: grid; gap: 6px; }
+#scene-version-origins:empty { display: none; }
 .continuation-history { list-style: none; margin: 0; padding: 0; }
 .continuation-history li {
   position: relative;
@@ -766,7 +784,8 @@
 .editor-dialog .memory-controls { margin: 0; padding: 0; border: 0; }
 .revision-line-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
 .delete-project-actions { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
-#delete-project-message { font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; }
+#delete-project-message, #delete-scene-message { font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; }
+.quiet-button.destructive-button:not(:disabled),
 .outline-button.destructive-button { color: #a02936; }
 .writing-primary.destructive-button { background: #a02936; }
 .writing-primary.destructive-button:hover { background: #872230; }

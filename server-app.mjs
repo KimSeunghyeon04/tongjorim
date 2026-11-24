@@ -42,6 +42,7 @@ const assets = new Map([
   ['/memory-knowledge.mjs', ['memory-knowledge.mjs', 'text/javascript; charset=utf-8']],
   ['/numbered-passages.mjs', ['numbered-passages.mjs', 'text/javascript; charset=utf-8']],
   ['/manuscript-scenes.mjs', ['manuscript-scenes.mjs', 'text/javascript; charset=utf-8']],
+  ['/scene-document.mjs', ['scene-document.mjs', 'text/javascript; charset=utf-8']],
   ['/draft-changes.mjs', ['draft-changes.mjs', 'text/javascript; charset=utf-8']],
   ['/recent-manuscript.mjs', ['recent-manuscript.mjs', 'text/javascript; charset=utf-8']],
   ['/scene-review.mjs', ['scene-review.mjs', 'text/javascript; charset=utf-8']],
@@ -184,14 +185,16 @@ function writingCompletion({ model, maxTokens, draft, systemPrompt, references, 
   }
   const prompt = resolveSystemPrompt(systemPrompt, defaultSystemPrompt)
   if (sceneRevision !== undefined) {
-    const { text, direction, following, history } = sceneRevision ?? {}
-    if (typeof text !== 'string' || !text.trim() || text.length > sceneDraftLimit ||
-        typeof direction !== 'string' || !direction.trim() || direction.length > writingFields.direction ||
+    const { text, direction, following, history, mode } = sceneRevision ?? {}
+    const filling = mode === 'fill'
+    if ((mode !== undefined && !filling) || typeof text !== 'string' || (filling ? text !== '' : !text.trim()) ||
+        text.length > sceneDraftLimit || typeof direction !== 'string' || (!filling && !direction.trim()) ||
+        direction.length > writingFields.direction || (filling && history !== undefined) ||
         (following !== undefined && (typeof following !== 'string' || following.length > sceneNeighborLimit))) {
       throw new RequestError(400, '수정할 초안과 수정 지시를 확인해 주세요.')
     }
     return continuationPayload(model, maxTokens, prompt, included,
-      sceneRevisionContext({ text, direction, following, history: readRevisionHistory(history) }))
+      sceneRevisionContext({ text, direction, following, mode, history: readRevisionHistory(history) }))
   }
   if (!allowEmpty && !Object.entries(included).some(([field, text]) => field !== 'projectTitle' && field !== 'sceneLength' && text.trim())) {
     throw new RequestError(400, '보낼 원고나 메모를 선택하거나 이어쓰기 지시를 입력해 주세요.')
@@ -298,18 +301,19 @@ function assistantCompletion({ kind, mode, model, maxTokens, target, messages, c
   }
 }
 
-function memoryCompletion({ model, projectTitle, memory, excerpt, systemPrompt, knowledge }) {
+function memoryCompletion({ model, maxTokens, projectTitle, memory, excerpt, systemPrompt, knowledge }) {
   if (typeof model !== 'string' || model.length > 200 || !modelIdPattern.test(model) ||
+      !validWritingTokenLimit(maxTokens) ||
       typeof projectTitle !== 'string' || projectTitle.length > writingFields.projectTitle ||
       typeof memory !== 'string' || memory.length > writingFields.manuscriptMemory ||
       typeof excerpt !== 'string' || !excerpt.trim() || excerpt.length > memoryExcerptLimit ||
       (knowledge != null && (!validKnowledge(knowledge) ||
         memoryWithKnowledge(memory, knowledge).length > writingFields.manuscriptMemory))) {
-    throw new RequestError(400, '메모를 갱신할 원고 범위를 확인해 주세요.')
+    throw new RequestError(400, '메모를 갱신할 원고 범위와 출력 토큰 한도를 확인해 주세요.')
   }
 
   return manuscriptMemoryPayload({
-    model, projectTitle, memory, excerpt, knowledge, systemPrompt: resolveSystemPrompt(systemPrompt, defaultMemoryPrompt),
+    model, maxTokens, projectTitle, memory, excerpt, knowledge, systemPrompt: resolveSystemPrompt(systemPrompt, defaultMemoryPrompt),
   })
 }
 

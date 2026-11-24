@@ -1,3 +1,4 @@
+import { editSceneDocument } from '../public/scene-document.mjs'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { readWorkspace } from '../public/writing-workspace.mjs'
@@ -39,14 +40,14 @@ test('브라우저 저장 공간이 부족해도 서버에 저장하고 충돌 �
   const storage = await import('../public/workspace-storage.mjs')
   await storage.openWorkspaceStorage()
   assert.equal(storage.readCachedWorkspace(), remote.snapshot)
-  initial.projects[0].manuscript = '디스크에 저장할 원고'
+  initial.projects[0].sceneDocument = editSceneDocument(initial.projects[0].sceneDocument, initial.projects[0].savedScenes[0].id, '디스크에 저장할 원고')
   const snapshot = JSON.stringify(initial)
   assert.equal(await saveSnapshot(storage, snapshot), true)
   assert.deepEqual(remote, { revision: 8, snapshot })
 
   const newer = JSON.stringify({ ...initial, projects: [{ ...initial.projects[0], manuscript: '다른 탭의 최신 원고' }] })
   remote = { revision: 9, snapshot: newer }
-  initial.projects[0].manuscript = '이 탭에서 편집 중인 원고'
+  initial.projects[0].sceneDocument = editSceneDocument(initial.projects[0].sceneDocument, initial.projects[0].savedScenes[0].id, '이 탭에서 편집 중인 원고')
   const unsaved = JSON.stringify(initial)
   assert.equal(await saveSnapshot(storage, unsaved), false)
   assert.equal(storage.readCachedWorkspace(), unsaved)
@@ -57,7 +58,7 @@ test('브라우저 저장 공간이 부족해도 서버에 저장하고 충돌 �
 test('새 탭을 여는 동안 다른 탭이 저장하면 늦게 도착한 조회로 편집본을 되돌리지 않는다', async t => {
   const initial = readWorkspace(null)
   const older = { revision: 7, snapshot: JSON.stringify(initial), pending: false }
-  initial.projects[0].manuscript = '첫 조회 도중 다른 탭에서 저장한 원고'
+  initial.projects[0].sceneDocument = editSceneDocument(initial.projects[0].sceneDocument, initial.projects[0].savedScenes[0].id, '첫 조회 도중 다른 탭에서 저장한 원고')
   const newer = { revision: 8, snapshot: JSON.stringify(initial), pending: false }
   let cache = JSON.stringify(older)
   storageGlobals(t, { getItem: () => cache, setItem(_key, value) { cache = value } })
@@ -80,7 +81,7 @@ test('새 탭을 여는 동안 다른 탭이 저장하면 늦게 도착한 조�
 test('다른 탭의 새 저장이 없으면 서버에서 다시 읽은 작업공간을 사용한다', async t => {
   const initial = readWorkspace(null)
   const remote = { revision: 1, snapshot: JSON.stringify(initial) }
-  initial.projects[0].manuscript = '교체하기 전 DB에서 사용하던 원고'
+  initial.projects[0].sceneDocument = editSceneDocument(initial.projects[0].sceneDocument, initial.projects[0].savedScenes[0].id, '교체하기 전 DB에서 사용하던 원고')
   let cache = JSON.stringify({ revision: 7, snapshot: JSON.stringify(initial), pending: false })
   storageGlobals(t, { getItem: () => cache, setItem(_key, value) { cache = value } })
   t.mock.method(globalThis, 'fetch', () => Response.json(remote))
@@ -96,9 +97,9 @@ test('앞선 저장이 SQLite에 반영되고 응답만 끊겨도 다시 연 탭
   const workspace = readWorkspace(null)
   const original = JSON.stringify(workspace)
   store.saveWorkspace(null, original)
-  workspace.projects[0].manuscript = '앞선 저장'
+  workspace.projects[0].sceneDocument = editSceneDocument(workspace.projects[0].sceneDocument, workspace.projects[0].savedScenes[0].id, '앞선 저장')
   const first = JSON.stringify(workspace)
-  workspace.projects[0].manuscript = '응답을 기다리는 동안 이어 쓴 원고'
+  workspace.projects[0].sceneDocument = editSceneDocument(workspace.projects[0].sceneDocument, workspace.projects[0].savedScenes[0].id, '응답을 기다리는 동안 이어 쓴 원고')
   const later = JSON.stringify(workspace)
   let cache = null
   storageGlobals(t, { getItem: () => cache, setItem(_key, value) { cache = value } })
@@ -142,10 +143,10 @@ test('예약 전에 캐시가 바뀌면 현재 스냅샷을 바탕으로 편집�
   const fetch = t.mock.method(globalThis, 'fetch', () => Response.json({ revision: 1, snapshot: expected }))
   const storage = await import('../public/workspace-storage.mjs?changed-baseline')
   await storage.openWorkspaceStorage()
-  initial.projects[0].manuscript = '다른 탭의 새 원고'
+  initial.projects[0].sceneDocument = editSceneDocument(initial.projects[0].sceneDocument, initial.projects[0].savedScenes[0].id, '다른 탭의 새 원고')
   const latest = JSON.stringify(initial)
   cache = JSON.stringify({ revision: 2, snapshot: latest, pending: false })
-  initial.projects[0].manuscript = '이전 스냅샷을 바탕으로 편집한 원고'
+  initial.projects[0].sceneDocument = editSceneDocument(initial.projects[0].sceneDocument, initial.projects[0].savedScenes[0].id, '이전 스냅샷을 바탕으로 편집한 원고')
   const conflict = new Error('다른 탭에서 작품이 바뀌어')
   await assert.rejects(storage.cacheWorkspace(current => {
     assert.equal(current, latest)

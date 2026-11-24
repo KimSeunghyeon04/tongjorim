@@ -17,14 +17,18 @@ const memoryKnowledge = project => memoryReadThrough(project) ? project.manuscri
 
 export function setManuscriptText(project, value, edit) {
   if (value === project.manuscript) return
-  const through = memoryReadThrough(project)
-  if (through && value.slice(0, through) !== project.manuscript.slice(0, through)) {
-    project.manuscriptMemory = { ...project.manuscriptMemory, stale: true }
-  }
+  invalidateManuscriptMemory(project, value)
   if (project.savedScenes?.length) project.savedScenes = moveSavedScenes(
     project.savedScenes, edit ?? manuscriptEdit(project.manuscript, value), value,
   )
   project.manuscript = value
+}
+
+export function invalidateManuscriptMemory(project, value) {
+  const through = memoryReadThrough(project)
+  if (through && value.slice(0, through) !== project.manuscript.slice(0, through)) {
+    project.manuscriptMemory = { ...project.manuscriptMemory, stale: true }
+  }
 }
 
 function excerptEnd(manuscript, start) {
@@ -41,7 +45,8 @@ function excerptEnd(manuscript, start) {
 export function memoryRequest(project, snapshot = project.manuscript, through = memoryReadThrough(project),
   memory = memorySummary(project), knowledge = memoryKnowledge(project)) {
   return {
-    model: modelFor(project, 'memory'), projectTitle: writingFieldPrefix('projectTitle', project.title), memory, knowledge,
+    model: modelFor(project, 'memory'), maxTokens: project.maxTokens,
+    projectTitle: writingFieldPrefix('projectTitle', project.title), memory, knowledge,
     excerpt: snapshot.slice(through, excerptEnd(snapshot, through)), systemPrompt: project.notePrompts?.memory,
   }
 }
@@ -50,7 +55,7 @@ export async function updateManuscriptMemory(project, snapshot, signal, onCheckp
   let through = memoryReadThrough(project)
   let memory = memorySummary(project)
   let knowledge = memoryKnowledge(project)
-  const { model, systemPrompt, projectTitle } = memoryRequest(project)
+  const { model, maxTokens, systemPrompt, projectTitle } = memoryRequest(project)
   const modelOptions = modelOptionsFor(project, model)
 
   while (through < snapshot.length) {
@@ -61,14 +66,15 @@ export async function updateManuscriptMemory(project, snapshot, signal, onCheckp
     if (excerpt.trim()) {
       let revised = ''
       const result = await requestCompletion('/api/memory', {
-        model, projectTitle, memory, excerpt, systemPrompt, knowledge, modelOptions,
+        model, maxTokens, projectTitle, memory, excerpt, systemPrompt, knowledge, modelOptions,
       }, {
         signal, projectId: project.id,
         onText(content) { revised += content },
       })
       onUsage(result.usage)
       revised = revised.trim()
-      if (!revised || result.truncated) {
+      if (result.truncated) throw new Error('출력 토큰 한도에 도달했어요. 설정에서 한도를 올린 뒤 메모를 다시 갱신해 주세요.')
+      if (!revised) {
         throw new Error('메모를 한 번에 완성하기 어려웠어요. 다시 시도하거나 프롬프트에 더 짧게 정리하도록 지시해 주세요.')
       }
       const update = applyMemoryUpdate(revised, { memory, excerpt, knowledge })
