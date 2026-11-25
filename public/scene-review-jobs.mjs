@@ -1,12 +1,12 @@
 import { requestCompletion } from './completion.js'
 import { withModelOptions } from './model-options.mjs'
 import { canonicalMilestone, evidenceInScene, matchingLoreName, parseSceneReview, pendingLoreChanges, resolveSceneReview,
-  reviewedScene, sceneResolutionInput, sceneReviewInputValid, sceneReviewRequest } from './scene-review.mjs'
+  reviewedScene, sceneForReview, sceneResolutionInput, sceneReviewInputValid, sceneReviewRequest } from './scene-review.mjs'
 
 export function setupSceneReviewJobs({ hasProject, saveWorkspace, onChange }) {
   const jobs = new WeakMap()
   const pendingReview = (project, attempted) => project.sceneReviews?.find(
-    review => review.pending && !attempted?.has(review) && reviewedScene(project, review),
+    review => !attempted?.has(review) && sceneForReview(project, review),
   )
 
   function start(project, { retry = false } = {}) {
@@ -53,12 +53,12 @@ export function setupSceneReviewJobs({ hasProject, saveWorkspace, onChange }) {
   }
 
   async function analyze(project, review, signal) {
-    const source = reviewedScene(project, review)
+    const source = sceneForReview(project, review)
     const input = sceneReviewRequest(project, source)
     if (!sceneReviewInputValid(input)) throw new Error('검토할 장면이 너무 길어요. 장면을 나눠 주세요.')
     const extracted = parseSceneReview(await requestReview(project, input, signal), input)
     if (!hasProject(project) || !project.sceneReviews?.includes(review)) return
-    if (reviewedScene(project, review)?.text !== source.text) throw new Error('검토하는 동안 원고가 바뀌었어요.')
+    if (sceneForReview(project, review)?.text !== source.text) throw new Error('검토하는 동안 원고가 바뀌었어요.')
     const matchingInput = sceneReviewRequest(project, source)
     const resolution = extracted.candidates.length || extracted.progress.length
       ? await requestReview(project, { ...matchingInput, ...sceneResolutionInput(extracted) }, signal) : undefined
@@ -66,11 +66,10 @@ export function setupSceneReviewJobs({ hasProject, saveWorkspace, onChange }) {
     let applied = false
     const saved = await saveWorkspace(() => {
       if (signal.aborted || !hasProject(project) || !project.sceneReviews?.includes(review)) return
-      if (reviewedScene(project, review)?.text !== source.text) return
+      if (sceneForReview(project, review)?.text !== source.text) return
       const before = project.sceneReviews
       const completed = new Set()
       for (const entry of before) {
-        if (entry === review) continue
         const original = reviewedScene(project, entry)
         if (!original) continue
         for (const item of entry.progress) {

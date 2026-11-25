@@ -43,19 +43,55 @@ export function markSceneForReview(project, scene) {
   return () => { if (project.sceneReviews === reviews) project.sceneReviews = previous }
 }
 
-export function reviewedScene(project, { sceneId, version }) {
+function currentReviewScene(project, { sceneId, version }) {
   const scene = project.savedScenes?.find(item => item.id === sceneId && item.accepted === version)
   if (!scene?.range) return null
-  if (project.sceneDocument && scene.text !== scene.versions[version].text) return null
   const range = sceneRange(project.manuscript, scene.range.start, scene.range.end)
   if (!range) return null
   const { start, end } = range
   return { scene, start, end, text: project.manuscript.slice(start, end) }
 }
 
+export function sceneForReview(project, review) {
+  if (!review.pending) return null
+  const source = currentReviewScene(project, review)
+  if (source && project.sceneDocument && source.scene.text !== source.scene.versions[review.version].text) return null
+  return source
+}
+
+function uniquePassageStarts(value) {
+  const starts = new Map()
+  for (const { text, start } of numberedPassages(value)) starts.set(text, starts.has(text) ? null : start)
+  return starts
+}
+
+function relocateEvidence(original, current) {
+  let originalStarts
+  let currentStarts
+  return ref => {
+    originalStarts ??= uniquePassageStarts(original)
+    currentStarts ??= uniquePassageStarts(current)
+    const originalStart = originalStarts.get(ref.text)
+    const start = currentStarts.get(ref.text)
+    // The stored occurrence must refer to the original passage, including when its text was quoted elsewhere.
+    if (originalStart == null || start == null || evidenceRange(original, ref)?.start !== originalStart) return null
+    return { start, end: start + ref.text.length, text: ref.text }
+  }
+}
+
+export function reviewedScene(project, review) {
+  if (review.pending) return null
+  const source = currentReviewScene(project, review)
+  if (!source || !project.sceneDocument) return source
+  const original = source.scene.versions[review.version].text
+  if (source.scene.text === original) return source
+  return { ...source, findEvidence: relocateEvidence(original.trim(), source.text) }
+}
+
 export function evidenceInScene(source, evidence) {
   const refs = Array.isArray(evidence) ? evidence : [{ text: evidence, occurrence: 0 }]
-  const ranges = refs.map(ref => evidenceRange(source.text, ref))
+  const findEvidence = source.findEvidence ?? (ref => evidenceRange(source.text, ref))
+  const ranges = refs.map(findEvidence)
   if (ranges.some(range => !range)) return null
   return ranges.map(({ start, end, text }) => ({ start: start + source.start, end: end + source.start, text }))
 }
