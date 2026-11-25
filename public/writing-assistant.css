@@ -70,3 +70,27 @@
 .note-composer { display: grid; gap: 7px; padding: 12px var(--note-gutter) 14px; border-top: 1px solid var(--line); }
 .note-composer-actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px; }
 .writer .note-composer textarea.writing-field { min-height: 62px; max-height: 140px; }
+
+.writing-workspace:has(#scene-chat-panel:not([hidden])) {
+  grid-template-columns: minmax(0, 1fr) clamp(304px, 28vw, 400px);
+}
+.writing-tools:has(#scene-chat-panel:not([hidden])) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.scene-chat-panel {
+  display: grid;
+  flex: 1;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  padding-top: 16px;
+}
+.scene-chat-header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.scene-chat-header .field-hint { margin: 0; }
+.scene-chat-conversation { padding: 10px 0 14px; }
+.scene-chat-conversation .note-empty { margin-top: 8px; }
+.scene-chat-conversation .assistant-transcript { max-height: none; overflow: visible; padding: 0; border: 0; }
+.scene-chat-conversation .assistant-message[data-role="assistant"] { max-width: 100%; }
+.scene-chat-composer { padding: 12px 0 0; }
+.scene-chat-composer .compact-actions { margin-inline-start: auto; }

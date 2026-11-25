@@ -456,7 +456,8 @@
 
 .writing-tools { overflow: auto; border-left: 1px solid var(--line); padding: 19px 18px 22px; }
 .tool-switcher { display: flex; flex-wrap: wrap; column-gap: 10px; border-bottom: 1px solid var(--line); }
-.tool-switcher:has(#continuation-tab:not([hidden])) { column-gap: 4px; }
+.scene-tool-tabs { display: contents; }
+.scene-tool-tabs:has(#continuation-tab:not([hidden])) { display: flex; flex: 0 0 100%; column-gap: 10px; }
 .tool-switcher button {
   min-height: 42px;
   padding: 0 2px;

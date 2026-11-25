@@ -188,6 +188,9 @@ test('장면 검토 결과는 원문 근거와 줄거리 문구가 있는 항목
   assert.deepEqual(resolveSceneReview(prerequisite, input, JSON.stringify({ progress_1: { missingPrerequisite: '아침' } })).progress, prerequisite.progress)
   assert.deepEqual(resolveSceneReview(prerequisite, { ...input, scene: '자정에 수문이 열렸다.' },
     JSON.stringify({ progress_1: { missingPrerequisite: '자정' } })).progress, prerequisite.progress)
+  for (const malformed of [{}, { missingPrerequisite: 0 }]) {
+    assert.throws(() => resolveSceneReview(prerequisite, input, JSON.stringify({ progress_1: malformed })), /근거 대조 결과/)
+  }
   const { lore_2, ...missingVerdict } = verdicts
   assert.equal(lore_2.scope, 'standing_rule')
   assert.throws(() => resolveSceneReview(result, input, JSON.stringify(missingVerdict)), /근거 대조 결과/)
@@ -333,6 +336,21 @@ test('수정 이력은 입력 예산에 포함되고 한도를 넘겨도 일부 
   const result = prepare({ ...scene, history })
   assert.ok(result.remaining < 0)
   assert.deepEqual(result.body.sceneRevision, { ...scene, history })
+})
+
+test('장면 대화는 수정 요청의 입력 예산에 포함된다', () => {
+  const project = { title: '창가', direction: '', manuscript: '', model: 'qa/write', maxTokens: 128 }
+  const scene = { text: '불이 꺼졌다.', direction: '마지막 문장을 살려 줘.' }
+  const conversation = [
+    { role: 'user', content: '불을 끄는 대목을 살리고 싶어요.' },
+    { role: 'assistant', content: '가'.repeat(1800) },
+  ]
+  const prepare = revision => planWritingContext(project, [], { contextLength: 1024 },
+    { manuscript: 0, pastPassages: 0 }, [], revision).finish()
+  assert.ok(prepare(scene).remaining > 0)
+  const result = prepare({ ...scene, conversation })
+  assert.ok(result.remaining < 0)
+  assert.deepEqual(result.body.sceneRevision.conversation, conversation)
 })
 
 test('장면 분량은 참고 자료 없이도 요청에 포함되고 비어 있으면 생략된다', () => {

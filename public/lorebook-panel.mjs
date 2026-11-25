@@ -60,6 +60,7 @@ export function setupLorebook({ get, currentProject, saveWorkspace, onChange, ad
   const discussion = get('lore-discussion')
   const discussionToggle = get('lore-discussion-toggle')
   const assistantForm = get('lore-assistant-form')
+  const retry = get('lore-assistant-retry')
   const prompt = get('lore-assistant-prompt')
   const transcript = get('lore-assistant-transcript')
   const deleteDialog = get('lore-delete-dialog')
@@ -176,11 +177,12 @@ export function setupLorebook({ get, currentProject, saveWorkspace, onChange, ad
     prompt.disabled = busy
     get('lore-send').disabled = busy || !prompt.value.trim()
     get('lore-draft-start').disabled = busy
+    retry.hidden = !assistant.canRetry
     get('lore-assistant-stop').hidden = !busy
     get('lore-draft-apply').disabled = busy
     get('lore-draft-discard').disabled = busy
     get('lore-assistant-reset').disabled = busy
-    get('lore-assistant-reset').hidden = transcript.hidden && !editing?.draft
+    get('lore-assistant-reset').hidden = transcript.hidden && !editing?.draft && !assistant.canRetry
     get('lore-conversation-empty').hidden = !transcript.hidden || Boolean(editing?.draft)
   }
 
@@ -210,8 +212,12 @@ export function setupLorebook({ get, currentProject, saveWorkspace, onChange, ad
       context: assistantProjectContext(project, [card.name, ...card.aliases, message].join('\n')),
       card, draft: entry.draft, systemPrompt: project.notePrompts?.lore,
     }, message, project)
+    finishAssistantRequest(entry, sent ? message : undefined)
+  }
+
+  function finishAssistantRequest(entry, sentMessage) {
     if (entry !== editing) return
-    if (sent) prompt.value = ''
+    if (sentMessage && prompt.value.trim() === sentMessage) prompt.value = ''
     syncAssistant()
     if (document.activeElement === document.body && !workspace.hidden && !editor.hidden && !discussion.hidden) prompt.focus()
   }
@@ -597,6 +603,10 @@ export function setupLorebook({ get, currentProject, saveWorkspace, onChange, ad
     sendAssistant('chat')
   })
   get('lore-draft-start').addEventListener('click', () => sendAssistant('draft'))
+  retry.addEventListener('click', async () => {
+    const entry = editing
+    finishAssistantRequest(entry, await assistant.retry())
+  })
   get('lore-assistant-stop').addEventListener('click', () => assistant.stop())
   get('lore-assistant-reset').addEventListener('click', () => {
     editing.draft = null

@@ -1,3 +1,4 @@
+import { parseCompletionJson } from './completion.js'
 import { activeLore, loreKinds, loreLimits } from './retrieval.mjs'
 import { evidenceAt, evidenceCountLimit, evidenceRange, numberedPassages, passageInput, passageLengthLimit } from './numbered-passages.mjs'
 import { sceneRange } from './manuscript-scenes.mjs'
@@ -159,7 +160,7 @@ export function sceneReviewPayload({ model, maxTokens, projectTitle, synopsis, s
 }
 
 export function parseSceneReview(response, { scene, synopsis }) {
-  const output = JSON.parse(response)
+  const output = parseCompletionJson(response)
   if (!record(output) || !list(output.progress, record) || !list(output.lore, record)) throw new Error('장면 검토 결과의 형식을 확인할 수 없어요.')
   const passages = numberedPassages(scene)
   const withEvidence = entry => ({ ...entry, evidence: evidenceAt(scene, passages, entry?.evidenceIds) })
@@ -189,15 +190,15 @@ export function sceneResolutionInput({ progress, candidates }) {
 
 export function resolveSceneReview({ progress, candidates }, { scene, cards }, response) {
   if (!progress.length && !candidates.length) return { progress: [], lore: [] }
-  const output = JSON.parse(response)
+  const output = parseCompletionJson(response)
   const progressResults = progress.map((_, index) => output?.[progressKey(index + 1)])
   const loreResults = candidates.map((_, index) => output?.[loreKey(index + 1)])
-  if (!record(output) || !progressResults.every(record) || !loreResults.every(record)) {
+  if (!record(output) || !progressResults.every(result => record(result) && typeof result.missingPrerequisite === 'string') ||
+      !loreResults.every(record)) {
     throw new Error('장면 근거 대조 결과의 형식을 확인할 수 없어요.')
   }
   const confirmed = progress.filter(({ milestone }, index) => {
-    const { missingPrerequisite } = progressResults[index]
-    const condition = typeof missingPrerequisite === 'string' ? missingPrerequisite.trim() : ''
+    const condition = progressResults[index].missingPrerequisite.trim()
     return !condition || condition.length >= milestone.length || !milestone.includes(condition) || scene.includes(condition)
   })
   return { progress: confirmed, lore: resolveSceneLore(candidates, cards, loreResults) }

@@ -12,6 +12,12 @@ export function pricing(model) {
   return model.request ? `${base} · 요청당 ${usdFormat.format(model.request)}` : base
 }
 
+export function parseCompletionJson(text) {
+  const trimmed = text.trim()
+  const fenced = /^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```$/i.exec(trimmed)
+  return JSON.parse(fenced?.[1] ?? trimmed)
+}
+
 export async function requestCompletion(path, body, { signal, onText, projectId }) {
   const response = await fetch(path, {
     method: 'POST',

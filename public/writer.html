@@ -200,6 +200,7 @@
             </div>
             <div class="compact-actions">
               <button type="button" class="outline-button" id="plan-generate" aria-describedby="plan-context-limit plan-revision-limit">초안 만들기</button>
+              <button type="button" class="quiet-button" id="plan-retry" hidden>다시 보내기</button>
               <button type="submit" class="writing-primary" id="plan-send" aria-describedby="plan-context-limit plan-revision-limit" disabled>보내기</button>
               <button type="button" class="outline-button" id="plan-stop" hidden>응답 중지</button>
             </div>
@@ -315,6 +316,7 @@
                 <div class="compact-actions lore-discussion-actions">
                   <button type="submit" id="lore-send" class="writing-primary" disabled>보내기</button>
                   <button type="button" id="lore-draft-start" class="outline-button">카드 초안 만들기</button>
+                  <button type="button" id="lore-assistant-retry" class="quiet-button" hidden>다시 보내기</button>
                   <button type="button" id="lore-assistant-stop" class="quiet-button" hidden>응답 중지</button>
                   <button type="button" id="lore-assistant-reset" class="quiet-button" hidden>새 대화</button>
                 </div>
@@ -352,8 +354,11 @@
         <button type="button" data-panel="notes" aria-controls="notes-panel" aria-pressed="false">작품 메모</button>
         <button type="button" data-panel="references" aria-controls="references-panel" aria-pressed="false">참고 자료</button>
         <button type="button" data-panel="lore" aria-controls="lore-panel" aria-pressed="false">로어북</button>
-        <button type="button" data-panel="scenes" aria-controls="scenes-panel" aria-pressed="false">장면</button>
-        <button type="button" id="continuation-tab" data-panel="continuation" aria-controls="continuation-panel" aria-pressed="false" hidden>수정 내역</button>
+        <div class="scene-tool-tabs">
+          <button type="button" data-panel="scenes" aria-controls="scenes-panel" aria-pressed="false">장면</button>
+          <button type="button" id="continuation-tab" data-panel="continuation" aria-controls="continuation-panel" aria-pressed="false" hidden>수정 내역</button>
+          <button type="button" id="scene-chat-tab" data-panel="scene-chat" aria-controls="scene-chat-panel" aria-pressed="false" hidden>AI 대화</button>
+        </div>
       </div>
       <div id="draft-tools-panel" class="tool-panel">
         <button class="outline-button" id="preview-request" type="button" aria-controls="request-preview" aria-expanded="false">요청 미리보기</button>
@@ -510,6 +515,32 @@
         <h2 class="sidebar-heading" id="continuation-history-title">초안 버전</h2>
         <ol class="continuation-history" id="continuation-history"></ol>
         <div id="scene-version-origins"></div>
+      </section>
+      <section id="scene-chat-panel" class="scene-chat-panel" aria-labelledby="scene-chat-title" hidden>
+        <header class="scene-chat-header">
+          <h2 class="sidebar-heading" id="scene-chat-title">장면 대화</h2>
+          <span class="field-hint" id="scene-chat-version"></span>
+        </header>
+        <div class="note-conversation scene-chat-conversation" id="scene-chat-conversation" role="region" aria-label="장면 대화 기록">
+          <p class="note-empty" id="scene-chat-empty">이 장면의 전개나 문장을 AI와 의논해 보세요.</p>
+          <ol class="assistant-transcript" id="scene-chat-transcript" hidden></ol>
+        </div>
+        <form class="note-composer scene-chat-composer" id="scene-chat-form">
+          <p class="field-hint assistant-status" id="scene-chat-status" role="status"></p>
+          <p class="field-hint" id="scene-chat-limit" hidden>이 장면은 대화에 보내기에는 너무 길어요.</p>
+          <div class="writing-input">
+            <label for="scene-chat-prompt">AI에게 물어보기</label>
+            <textarea class="writing-field" id="scene-chat-prompt" rows="2" required aria-describedby="scene-chat-version scene-chat-limit"></textarea>
+          </div>
+          <div class="note-composer-actions">
+            <button type="button" class="quiet-button" id="scene-chat-reset" hidden>새 대화</button>
+            <div class="compact-actions">
+              <button type="button" class="quiet-button" id="scene-chat-retry" hidden>다시 보내기</button>
+              <button type="submit" class="writing-primary" id="scene-chat-send" disabled>보내기</button>
+              <button type="button" class="outline-button" id="scene-chat-stop" hidden>응답 중지</button>
+            </div>
+          </div>
+        </form>
       </section>
     </aside>
   </div>

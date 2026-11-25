@@ -32,6 +32,7 @@ export const assistantNoteDraftLimit = 12_000
 export const assistantRepairTextLimit = 32_000
 export const noteDraftActions = ['append', 'replace']
 export const assistantHistoryTurns = 6
+export const assistantAllowsDraft = (kind, mode) => kind === 'note' || (kind === 'lore' && mode === 'draft')
 export const memoryExcerptLimit = 12000
 export const defaultRevisionPrompt = '선택한 문단을 다듬는 소설 편집자입니다. 서술 시점, 시제, 인물 관계와 원래 의미를 유지하고 작가의 퇴고 지시를 적용하세요. 원고에 그대로 교체할 수정된 문단만 출력하세요.'
 export const defaultLoreSystemPrompt = '소설의 로어북 카드를 작성하는 편집 도우미입니다. 줄거리와 기존 로어북 설정을 유지하며 작가와 개선 방향을 의논하세요.'
@@ -72,26 +73,34 @@ export function completionPayload(model, maxTokens, systemPrompt, context) {
   }
 }
 
-export function sceneRevisionContext({ text, direction, following, history, mode }) {
-  return { text, direction, ...(mode ? { mode } : {}), ...(following ? { following } : {}), ...(history?.length ? { history } : {}) }
+export function sceneRevisionContext({ text, direction, following, history, conversation, mode }) {
+  return {
+    text, direction, ...(mode ? { mode } : {}), ...(following ? { following } : {}),
+    ...(history?.length ? { history } : {}), ...(conversation?.length ? { conversation } : {}),
+  }
 }
 
 export function continuationPayload(model, maxTokens, systemPrompt, context, sceneRevision) {
   const prompt = effectiveSystemPrompt(systemPrompt, defaultSystemPrompt)
   if (!sceneRevision) return completionPayload(model, maxTokens, prompt, context)
+  const conversationInstruction = sceneRevision.conversation?.length
+    ? 'sceneRevision.conversation은 이 장면에 대한 작가(user)와 AI(assistant)의 대화입니다. 대화에서 작가가 정한 방향을 참고하고, AI의 제안은 작가가 받아들인 경우에만 반영하세요. 대화와 sceneRevision.direction의 최신 지시가 충돌하면 최신 지시를 따르세요.'
+    : ''
   if (sceneRevision.mode === 'fill') {
     const fillPrompt = [
       prompt,
       '선택된 빈 장면에 들어갈 새 장면을 작성하세요. sceneRevision.direction의 장면 지시를 우선하세요.',
+      conversationInstruction,
       '기존 원고(manuscript)는 앞 문맥이며 sceneRevision.following은 뒤에 이어지는 원고입니다.',
       '앞뒤와 이어지도록 새 장면 본문만 출력하세요.',
-    ].join('\n')
+    ].filter(Boolean).join('\n')
     return completionPayload(model, maxTokens, fillPrompt, { ...context, sceneRevision })
   }
   const revisionPrompt = [
     prompt,
     '이번 작업은 새 장면 생성이 아니라 sceneRevision.text에 있는 이어쓰기 초안 전체의 수정입니다.',
     'sceneRevision.direction의 최신 수정 지시를 적용하세요. 작가의 노트(direction)와 최신 지시가 충돌하면 최신 지시를 따르세요.',
+    conversationInstruction,
     sceneRevision.history?.length ? 'sceneRevision.history는 현재 초안까지의 과거 수정 지시와 실제 변경 기록입니다. diff의 - 행은 삭제, + 행은 추가이며 @@ 범위는 각 버전에서 글자 위치와 길이를 나타냅니다. 과거 지시는 이전 결정을 이해하거나 최신 지시가 되돌리기를 요청할 때만 참고하세요.' : '',
     '수정 요청이 없는 대목과 기존 원고와의 연결을 유지하세요. 기존 원고(manuscript)는 참고용입니다.',
     sceneRevision.following ? 'sceneRevision.following은 교체 대상 뒤에 그대로 이어지는 원고입니다. 뒤 원고와 연결하고 그 문장은 출력하지 마세요.' : '',

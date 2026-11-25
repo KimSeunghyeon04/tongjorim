@@ -65,6 +65,15 @@ const continuationRewrite = get('continuation-rewrite')
 const continuationStop = get('continuation-stop')
 const continuationAccept = get('continuation-accept')
 const continuationDiscard = get('continuation-discard')
+const sceneChatTab = get('scene-chat-tab')
+const sceneChatPanel = get('scene-chat-panel')
+const sceneChatPrompt = get('scene-chat-prompt')
+const sceneChatSend = get('scene-chat-send')
+const sceneChatRetry = get('scene-chat-retry')
+const sceneChatStop = get('scene-chat-stop')
+const sceneChatReset = get('scene-chat-reset')
+const sceneChatTranscript = get('scene-chat-transcript')
+const noSceneChat = {}
 const scenesPanel = get('scenes-panel')
 const savedSceneList = get('saved-scene-list')
 const sceneRewrite = get('saved-scene-rewrite')
@@ -95,6 +104,7 @@ const planAction = get('plan-action')
 const planIdea = get('plan-idea')
 const planGenerate = get('plan-generate')
 const planSend = get('plan-send')
+const planRetry = get('plan-retry')
 const planStop = get('plan-stop')
 const planReset = get('plan-reset')
 const planTranscript = get('plan-transcript')
@@ -171,6 +181,13 @@ const planAssistant = createWritingAssistant({
     currentPlanEntry().drafts[noteAction] = { text: draft, original: context[target] }
     renderPlanDraft()
   },
+})
+const sceneChatAssistant = createWritingAssistant({
+  transcript: sceneChatTranscript,
+  scrollport: get('scene-chat-conversation'),
+  status: get('scene-chat-status'),
+  onChange: syncControls,
+  onReply: closeRequestPreview,
 })
 
 function showStorageStatus() {
@@ -256,9 +273,10 @@ function renderLegacySceneNotes(notes = []) {
 }
 
 function switchPanel(name = manuscriptPanel) {
-  if (name === 'continuation' && get('continuation-tab').hidden) {
+  if ((name === 'continuation' && get('continuation-tab').hidden) || (name === 'scene-chat' && sceneChatTab.hidden)) {
     name = currentContinuation()?.previousPanel ?? 'tools'
   }
+  if (!sceneChatPanel.hidden) sceneChatAssistant.rememberScroll()
   if (notePlanner.hidden) manuscriptPanel = name
   const panel = notePlanner.hidden ? manuscriptPanel : 'notes'
   for (const button of toolButtons) {
@@ -266,6 +284,7 @@ function switchPanel(name = manuscriptPanel) {
     button.setAttribute('aria-pressed', String(selected))
     get(button.getAttribute('aria-controls')).hidden = !selected
   }
+  if (!sceneChatPanel.hidden) sceneChatAssistant.restoreScroll()
   writingTools.scrollTop = 0
   syncSceneControls()
 }
@@ -291,7 +310,9 @@ function updateCharacterCount() {
 }
 
 function syncManuscriptGutter() {
-  manuscriptLines.style.width = `${manuscript.clientWidth}px`
+  // Keep the fractional text width so the mirror wraps at the same character.
+  const scrollbarWidth = manuscript.offsetWidth - manuscript.clientWidth
+  manuscriptLines.style.width = `${manuscript.getBoundingClientRect().width - scrollbarWidth}px`
   const translate = `0 ${-manuscript.scrollTop}px`
   manuscriptLines.style.translate = translate
   manuscriptSceneMarks.style.translate = translate
@@ -316,12 +337,10 @@ function syncManuscriptSceneActions() {
   if (lastLine) {
     const row = lastLine.getBoundingClientRect()
     const origin = manuscriptEditor.getBoundingClientRect().top
-    const top = row.top - origin
     const bottom = row.bottom - origin
+    const top = bottom - Number.parseFloat(getComputedStyle(manuscriptLines).lineHeight)
     manuscriptAddScene.hidden = bottom <= 0 || top >= height
-    // Keep the action visible at the tail of a long, wrapped final line.
-    const anchor = top >= 0 ? top : bottom - sceneActionHeight
-    const tailTop = Math.round(Math.max(0, Math.min(anchor + 2, height - sceneActionHeight)))
+    const tailTop = Math.round(Math.max(0, Math.min(top + 2, height - sceneActionHeight)))
     manuscriptAddScene.style.setProperty('--add-scene-top', `${tailTop}px`)
     manuscriptAddScene.classList.toggle('is-compact', visible.some(top => Math.abs(top - tailTop) < sceneActionHeight))
   }
@@ -415,6 +434,13 @@ function sameManuscriptRow(first, last, rowHeight) {
   return Math.abs(first.top - last.top) < rowHeight / 2
 }
 
+function manuscriptVisualRowTop(offset, rect, { top, rowHeight }) {
+  const line = manuscriptLines.children[manuscriptLineAt(offset) - 1]
+  const lineTop = line.getBoundingClientRect().top
+  const wrappedRow = Math.max(0, Math.floor((rect.top - lineTop) / rowHeight))
+  return Math.round(lineTop + wrappedRow * rowHeight - top)
+}
+
 function createSceneOutline(bounds, first, last, endsWithinRow) {
   const { left, right, textLeft, mirrorLeft, top, rowHeight } = bounds
   const firstX = Math.round(first.left - mirrorLeft)
@@ -484,7 +510,7 @@ function renderManuscriptSceneMarks() {
     top: manuscriptLines.firstElementChild.getBoundingClientRect().top,
     rowHeight: Number.parseFloat(getComputedStyle(manuscriptLines).lineHeight),
   }
-  const finalRow = manuscriptLines.lastElementChild.getBoundingClientRect()
+  const finalRowTop = manuscriptLines.lastElementChild.getBoundingClientRect().bottom - bounds.rowHeight - bounds.top
   let firstMark
   const insertionRows = new Map()
   const marks = document.createDocumentFragment()
@@ -494,26 +520,26 @@ function renderManuscriptSceneMarks() {
   for (const [index, scene] of scenes.entries()) {
     const { id, range } = scene
     const first = manuscriptOffsetRect(range.start)
+    const lastOffset = Math.max(range.start, range.end - 1)
+    const last = lastOffset === range.start ? first : manuscriptOffsetRect(lastOffset)
     const selected = id === selectedId
-    const rowTop = manuscriptLines.children[manuscriptLineAt(range.start) - 1].getBoundingClientRect().top
-    const wrappedRow = Math.max(0, Math.floor((first.top - rowTop) / bounds.rowHeight))
-    const top = Math.round(rowTop + wrappedRow * bounds.rowHeight - bounds.top)
-    {
-      const last = range.start < range.end ? manuscriptOffsetRect(range.end - 1) : first
-      let next = range.end
-      while (/[^\S\n]/u.test(text[next] ?? '')) next++
-      const endsWithinRow = next < text.length && text[next] !== '\n' &&
-        sameManuscriptRow(last, manuscriptOffsetRect(next), bounds.rowHeight)
-      const outline = createSceneOutline(bounds, first, last, endsWithinRow)
-      outline.classList.toggle('is-selected', selected)
-      outlines.append(outline)
-    }
-    if (index) {
+    let next = range.end
+    while (/[^\S\n]/u.test(text[next] ?? '')) next++
+    const endsWithinRow = next < text.length && text[next] !== '\n' &&
+      sameManuscriptRow(last, manuscriptOffsetRect(next), bounds.rowHeight)
+    const outline = createSceneOutline(bounds, first, last, endsWithinRow)
+    outline.classList.toggle('is-selected', selected)
+    outlines.append(outline)
+
+    const followingScene = scenes[index + 1]
+    if (followingScene) {
+      const top = manuscriptVisualRowTop(lastOffset, last, bounds)
       if (!insertionRows.has(top)) insertionRows.set(top, [])
-      insertionRows.get(top).push(scene)
-      continue
+      insertionRows.get(top).push(followingScene)
     }
-    if (sameManuscriptRow(first, finalRow, bounds.rowHeight)) continue
+    if (index) continue
+    const top = manuscriptVisualRowTop(range.start, first, bounds)
+    if (Math.abs(top - finalRowTop) < bounds.rowHeight / 2) continue
     const mark = document.createElement('span')
     mark.className = 'manuscript-scene-mark'
     mark.classList.toggle('is-selected', selected)
@@ -889,7 +915,8 @@ function syncControls() {
   generate.hidden = writing
   stopWriting.hidden = !writing
   get('generate-revision').disabled = busy || !get('continuation-paper').hidden || !selectedRevision()
-  syncContinuationControls(busy)
+  syncContinuationControls(busy || sceneChatAssistant.busy)
+  syncSceneChatControls(busy)
   syncSceneControls()
   updatePlanControls()
 }
@@ -1317,7 +1344,10 @@ function renderContinuation() {
   get('return-to-continuation').hidden = !draft?.showManuscript
   const historyTab = get('continuation-tab')
   historyTab.hidden = !editing || activeWorkspaceTab !== manuscriptTab
-  if (historyTab.hidden && manuscriptPanel === 'continuation') switchPanel()
+  sceneChatTab.hidden = historyTab.hidden || Boolean(draft?.archive)
+  if ((historyTab.hidden && manuscriptPanel === 'continuation') || (sceneChatTab.hidden && manuscriptPanel === 'scene-chat')) switchPanel()
+  sceneChatAssistant.useConversation(draft && !draft.archive ? draft : noSceneChat)
+  sceneChatPrompt.value = draft?.chatMessage ?? ''
   if (!editing) {
     if (!draft) renderDraftChanges()
     continuationHistory.replaceChildren()
@@ -1335,8 +1365,9 @@ function renderContinuation() {
   const position = draft.scene ? `${manuscriptLineRange(draft.scene.range)} · ` : ''
   const versionStatus = draft.archive ? '보관된 장면' : selected === draft.currentVersion ? '현재 원고' :
     selected < draft.scene?.versions.length ? '저장된 버전' : '미반영'
-  get('continuation-version').textContent =
-    `${position}버전 ${selected + 1} · ${versionStatus}`
+  const versionLabel = `버전 ${selected + 1} · ${versionStatus}`
+  get('continuation-version').textContent = position + versionLabel
+  get('scene-chat-version').textContent = versionLabel
   continuationAccept.textContent = draft.scene ? (selected < draft.scene.versions.length ? '이 버전 복원' : '이 장면에 반영') : '원고 끝에 붙이기'
   const filling = draft.scene && !version.text.trim()
   continuationRewrite.textContent = filling ? '이 장면 쓰기' : '다시 써줘'
@@ -1439,7 +1470,7 @@ function syncContinuationControls(busy) {
 
 function showContinuationVersion(index) {
   const draft = currentContinuation()
-  if (!draft || activeRequest || planAssistant.busy || !draft.versions[index] || index === draft.selected) return
+  if (!draft || activeRequest || planAssistant.busy || sceneChatAssistant.busy || !draft.versions[index] || index === draft.selected) return
   draft.selected = index
   draft.feedback = ''
   renderContinuation()
@@ -1488,6 +1519,7 @@ function sceneWritingInputs(project, draft) {
   }
   const sceneRevision = {
     text, direction: draft.direction.trim(), following: draft.following, precedingLimit: draft.precedingLimit,
+    conversation: sceneChatAssistant.history,
     ...(filling ? { mode: 'fill' } : { history: sceneRevisionHistory(draft.versions, draft.selected) }),
   }
   return { source, sceneRevision }
@@ -1563,7 +1595,7 @@ function closeContinuation(project) {
     syncControls()
     return
   }
-  if (manuscriptPanel === 'continuation' || previewOrigin?.button.id === 'preview-scene-request') {
+  if (['continuation', 'scene-chat'].includes(manuscriptPanel) || previewOrigin?.button.id === 'preview-scene-request') {
     closeRequestPreview()
     switchPanel(draft.previousPanel)
   }
@@ -1829,7 +1861,9 @@ function setWorkspaceTab(activeTab) {
   renderSidebarContext()
   renderContinuation()
   const draft = currentContinuation()
-  if (activeTab === manuscriptTab && draft && !draft.showManuscript) switchPanel('continuation')
+  if (activeTab === manuscriptTab && draft && !draft.showManuscript) {
+    switchPanel(manuscriptPanel === 'scene-chat' && !draft.archive ? 'scene-chat' : 'continuation')
+  }
   else switchPanel(activeTab === loreWorkspaceTab ? 'lore' : undefined)
   syncControls()
   if (activeTab === manuscriptTab) showContinuationStart()
@@ -1916,8 +1950,10 @@ function updatePlanControls() {
   planGenerate.disabled = Boolean(activeRequest) || tooLongToReplace
   planSend.hidden = planning
   planSend.disabled = Boolean(activeRequest) || tooLongToReplace || !planIdea.value.trim()
+  planRetry.hidden = !planAssistant.canRetry
+  planRetry.disabled = Boolean(activeRequest)
   planStop.hidden = !planning
-  planReset.disabled = planning || planTranscript.hidden
+  planReset.disabled = planning || (planTranscript.hidden && !planAssistant.canRetry)
   get('plan-revision-limit').hidden = !tooLongToReplace
 
   get('plan-empty').hidden = !planTranscript.hidden || draft !== null
@@ -1964,14 +2000,62 @@ async function sendPlanMessage(mode) {
     draft: reusableDraft || null,
   }, message, project)
   if (!sent) entry.idea = idea
+  finishPlanRequest(entry, mode === 'draft' && sent && drafts[action] && drafts[action] !== previousDraft)
+}
+
+function finishPlanRequest(entry, receivedDraft) {
   if (currentPlanEntry() !== entry) return
   planIdea.value = entry.idea
   updatePlanControls()
   if (document.activeElement === document.body && !notePlanner.hidden) {
-    const receivedDraft = mode === 'draft' && sent && drafts[action] && drafts[action] !== previousDraft
     const field = receivedDraft ? planDraftText : planIdea
     field.focus()
   }
+}
+
+function syncSceneChatControls(writingBusy) {
+  const project = currentProject()
+  const draft = currentContinuation()
+  const tooLong = (draft?.versions[draft.selected].text.length ?? 0) > sceneDraftLimit
+  const { busy } = sceneChatAssistant
+  const unavailable = !draft || draft.archive || !continuationIsCurrent(project, draft) || tooLong
+  sceneChatPrompt.readOnly = busy
+  sceneChatPrompt.disabled = Boolean(unavailable)
+  sceneChatSend.hidden = busy
+  sceneChatSend.disabled = Boolean(busy || writingBusy || unavailable || !sceneChatPrompt.value.trim())
+  sceneChatRetry.hidden = !sceneChatAssistant.canRetry
+  sceneChatRetry.disabled = Boolean(writingBusy || unavailable)
+  sceneChatStop.hidden = !busy
+  sceneChatReset.hidden = sceneChatTranscript.hidden && !sceneChatAssistant.canRetry
+  sceneChatReset.disabled = busy || writingBusy
+  get('scene-chat-empty').hidden = !sceneChatTranscript.hidden
+  get('scene-chat-limit').hidden = !tooLong
+}
+
+async function sendSceneMessage() {
+  if (sceneChatPanel.hidden || sceneChatSend.disabled) return
+  const project = currentProject()
+  const draft = currentContinuation()
+  const message = sceneChatPrompt.value.trim()
+  const { text } = draft.versions[draft.selected]
+  const sent = await sceneChatAssistant.send({
+    kind: 'scene', mode: 'chat', model: modelFor(project, 'plan'), maxTokens: project.maxTokens,
+    context: assistantProjectContext(project, message, text),
+    scene: {
+      version: draft.selected + 1, text,
+      preceding: draft.tail.slice(-sceneNeighborLimit).toWellFormed(),
+      following: (draft.following ?? '').slice(0, sceneNeighborLimit).toWellFormed(),
+    },
+  }, message, project)
+  finishSceneChatRequest(draft, sent ? message : undefined)
+}
+
+function finishSceneChatRequest(draft, sentMessage) {
+  if (sentMessage && draft.chatMessage?.trim() === sentMessage) draft.chatMessage = ''
+  if (currentContinuation() !== draft) return
+  sceneChatPrompt.value = draft.chatMessage ?? ''
+  syncControls()
+  if (!sceneChatPanel.hidden && document.activeElement === document.body) sceneChatPrompt.focus()
 }
 
 function bindField(id, update) {
@@ -2335,6 +2419,13 @@ get('note-planner-form').addEventListener('submit', event => {
   sendPlanMessage('chat')
 })
 planGenerate.addEventListener('click', () => sendPlanMessage('draft'))
+planRetry.addEventListener('click', async () => {
+  if (planRetry.disabled) return
+  const entry = currentPlanEntry()
+  const sentMessage = await planAssistant.retry()
+  if (sentMessage && entry.idea.trim() === sentMessage) entry.idea = ''
+  finishPlanRequest(entry)
+})
 planStop.addEventListener('click', () => planAssistant.stop())
 get('plan-show-draft').addEventListener('click', () => planDraftText.focus())
 planReset.addEventListener('click', () => {
@@ -2450,6 +2541,28 @@ get('add-project').addEventListener('click', () => {
 for (const button of toolButtons) {
   button.addEventListener('click', () => switchPanel(button.dataset.panel))
 }
+sceneChatPrompt.maxLength = assistantMessageLimit
+sceneChatPrompt.addEventListener('input', () => {
+  const draft = currentContinuation()
+  if (!draft) return
+  draft.chatMessage = sceneChatPrompt.value
+  syncSceneChatControls(Boolean(activeRequest || planAssistant.busy))
+})
+get('scene-chat-form').addEventListener('submit', event => {
+  event.preventDefault()
+  void sendSceneMessage()
+})
+sceneChatRetry.addEventListener('click', async () => {
+  if (sceneChatPanel.hidden || sceneChatRetry.disabled) return
+  const draft = currentContinuation()
+  finishSceneChatRequest(draft, await sceneChatAssistant.retry())
+})
+sceneChatStop.addEventListener('click', () => sceneChatAssistant.stop())
+sceneChatReset.addEventListener('click', () => {
+  closeRequestPreview()
+  sceneChatAssistant.reset()
+  sceneChatPrompt.focus()
+})
 get('manuscript-composer').addEventListener('submit', event => {
   event.preventDefault()
   continueManuscript()
