@@ -263,6 +263,10 @@ test('장면 대화는 말줄임표만 받으면 같은 요청에 재작성 지�
   assert.match(body.messages[0].content, /첫 문장에서 작가의 질문에 직접 답하세요/)
   assert.match(body.messages[0].content, /확인 질문 하나를 하세요/)
   assert.match(body.messages[0].content, /문단 사이에 빈 줄을 넣으세요/)
+  for (const { messages: [system] } of [body, retry]) {
+    assert.match(system.content, /보내기 전에 reply가 작가의 마지막 요청에 답하는지 확인하세요/)
+    assert.match(system.content, /reply에는 작가에게 보여 줄 최종 답변만 넣으세요/)
+  }
   assert.doesNotMatch(body.messages[0].content, /직전 답변/)
   assert.match(retry.messages[0].content, /직전 답변이 말줄임표\(\.\.\.\)만으로 끝났습니다/)
   assert.match(retry.messages[0].content, /작가의 원래 요청에 구체적으로 답하세요/)

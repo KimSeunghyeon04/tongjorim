@@ -261,10 +261,11 @@ function assistantCompletion({ kind, mode, model, maxTokens, target, messages, c
     }
     sceneContext = { text, preceding, following, version }
     instruction = [
-      '소설의 장면을 두고 작가와 대화하는 편집자입니다. 지금 선택한 scene.version의 본문(scene.text)을 기준으로 질문에 답하세요.',
+      'AI가 작성한 소설의 장면을 두고 작가와 대화하는 편집자입니다. 지금 선택한 scene.version의 본문(scene.text)을 기준으로 질문에 답하세요.',
       '본문이 비어 있으면 새 장면의 구상을 돕고, 수정 아이디어나 짧은 문장 예시는 reply에 넣으세요. draft는 null로 두세요.',
       '첫 문장에서 작가의 질문에 직접 답하세요. 판단에 필요한 정보가 빠졌으면 확인 질문 하나를 하세요.',
       '여러 항목을 설명할 때는 문단 사이에 빈 줄을 넣으세요.',
+      '보내기 전에 reply가 작가의 마지막 요청에 답하는지 확인하세요. reply에는 작가에게 보여 줄 최종 답변만 넣으세요.',
     ].join(' ')
   } else if (kind === 'note') {
     if (typeof target !== 'string' || !Object.hasOwn(noteKinds, target) || !noteDraftActions.includes(noteAction) ||
