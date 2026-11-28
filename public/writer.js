@@ -2813,7 +2813,7 @@ recoveryFile.addEventListener('change', async () => {
 get('open-delete-project').addEventListener('click', () => {
   pendingProjectDeletion = currentProject()
   get('delete-project-message').textContent =
-    `‘${projectName(pendingProjectDeletion)}’의 원고, 메모, 로어북과 설정을 삭제해요. 복원하려면 삭제 전에 JSON으로 백업해 주세요.`
+    `‘${projectName(pendingProjectDeletion)}’의 원고, 메모, 로어북과 설정을 삭제해요. 서버에 저장되면 이 작품의 모델 요청과 응답 기록도 삭제돼요. 복원할 작품 내용은 먼저 JSON으로 백업해 주세요.`
   get('delete-project-status').hidden = true
   deleteProjectDialog.showModal()
 })
@@ -2840,12 +2840,18 @@ get('delete-project-form').addEventListener('submit', async event => {
     if (index < 0) return
     const remaining = previous.filter(item => item !== project)
     if (!remaining.length) remaining.push(makeProject())
+    const priorDeletions = workspace.deletedProjectIds
+    if (!remaining.some(item => item.id === project.id)) {
+      workspace.deletedProjectIds = [...(priorDeletions ?? []), project.id]
+    }
     workspace.projects = remaining
     workspace.activeProjectId = remaining[Math.min(index, remaining.length - 1)].id
     return () => {
       if (workspace.projects !== remaining) return
       workspace.projects = previous
       workspace.activeProjectId = project.id
+      if (priorDeletions === undefined) delete workspace.deletedProjectIds
+      else workspace.deletedProjectIds = priorDeletions
     }
   })) {
     status.textContent = storageWarning
@@ -2858,7 +2864,7 @@ get('delete-project-form').addEventListener('submit', async event => {
   continuations.delete(project)
   deleteProjectDialog.close()
   renderWorkspace()
-  fileStatus(`‘${projectName(project)}’을 삭제했어요.`)
+  fileStatus(`작품 목록에서 ‘${projectName(project)}’을 삭제했어요. 서버 반영 여부는 원고의 저장 상태에서 확인할 수 있어요.`)
 })
 get('download-pack').addEventListener('click', () => {
   try { downloadJson(exportPack(currentProject(), packOptions()), '통조림-설정.json') }

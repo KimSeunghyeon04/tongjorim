@@ -708,8 +708,9 @@ export function createTongjorimServer({ apiKey, managementKey, store, port, upst
             (attempt !== undefined && (typeof attempt !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(attempt)))) {
           throw new RequestError(400, '작품 저장 형식이 올바르지 않아요.')
         }
-        try { readWorkspace(snapshot) } catch { throw new RequestError(400, '작업공간을 읽을 수 없어요.') }
-        const result = store.saveWorkspace(revision, snapshot, attempt)
+        let state
+        try { state = readWorkspace(snapshot) } catch { throw new RequestError(400, '작업공간을 읽을 수 없어요.') }
+        const result = store.saveWorkspace(revision, snapshot, attempt, state)
         json(res, result.conflict ? 409 : 200, result)
       } else if (req.method === 'POST' && path === '/api/write') {
         await streamCompletion(req, res, writingCompletion, writingRequestBytes)

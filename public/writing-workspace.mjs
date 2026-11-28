@@ -71,6 +71,14 @@ function normalizeWorkspace(data) {
       !data.projects.every(validProjectBase)) {
     throw new Error('Unknown workspace')
   }
+  if (data.deletedProjectIds !== undefined) {
+    const activeIds = new Set(data.projects.map(project => project.id))
+    const deletedIds = data.deletedProjectIds
+    if (!Array.isArray(deletedIds) || new Set(deletedIds).size !== deletedIds.length ||
+        deletedIds.some(id => typeof id !== 'string' || !id || id.length > 100 || activeIds.has(id))) {
+      throw new Error('Invalid deleted projects')
+    }
+  }
   if (data.version === 1 && data.projects.every(project => Array.isArray(project.scenes) &&
       project.scenes.length && project.scenes.every(scene => hasSceneNote(scene) &&
         typeof scene.id === 'string' && typeof scene.text === 'string'))) {

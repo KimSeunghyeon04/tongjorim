@@ -61,3 +61,59 @@ test('저장 충돌은 같은 시도의 직전 반영만 구별하며 오래된 
     store.close()
   }
 })
+
+test('저장된 삭제만 직전 원고와 모델 기록을 없애고 다른 연결의 늦은 기록도 막는다', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'tongjorim-delete-test-'))
+  const filename = join(directory, 'workspace.sqlite')
+  const store = openTongjorimStore(filename)
+  const logger = openTongjorimStore(filename)
+  const db = new DatabaseSync(filename)
+  const logs = () => db.prepare('SELECT project_id FROM model_requests ORDER BY project_id').all().map(row => row.project_id)
+  const log = (id, projectId) => logger.recordModelRequest(id, {
+    timestamp: '2026-11-28T00:00:00Z', projectId, route: '/api/write',
+    request: { model: 'qa/write', messages: [{ content: projectId }] }, response: { text: projectId }, error: null,
+  })
+  const removed = { id: 'remove', manuscript: '삭제될 원고' }
+  const kept = { id: 'keep', manuscript: '남겨야 할 원고' }
+  const initially = JSON.stringify({ activeProjectId: removed.id, projects: [removed, kept], deletedProjectIds: ['first-unsaved'] })
+  const remaining = JSON.stringify({ activeProjectId: kept.id, projects: [kept], deletedProjectIds: [removed.id, 'unsaved'] })
+  const previous = () => db.prepare('SELECT previous_snapshot FROM workspace').get().previous_snapshot
+  try {
+    log('first', 'first-unsaved')
+    assert.deepEqual(store.saveWorkspace(null, initially), { revision: 1 })
+    assert.deepEqual(logs(), [])
+    log('unsaved', 'unsaved')
+    log('remove', 'remove')
+    log('keep', 'keep')
+
+    assert.deepEqual(store.saveWorkspace(null, remaining), { conflict: true, revision: 1, snapshot: initially })
+    assert.deepEqual(logs(), ['keep', 'remove', 'unsaved'])
+    db.exec("CREATE TRIGGER reject_save BEFORE UPDATE ON workspace BEGIN SELECT RAISE(ABORT, 'blocked'); END;")
+    assert.throws(() => store.saveWorkspace(1, remaining), /blocked/)
+    assert.deepEqual(logs(), ['keep', 'remove', 'unsaved'])
+    assert.deepEqual(store.readWorkspace(), { revision: 1, snapshot: initially })
+    assert.equal(previous(), null)
+    db.exec('DROP TRIGGER reject_save')
+
+    assert.deepEqual(store.saveWorkspace(1, remaining, 'delete'), { revision: 2 })
+    assert.deepEqual(store.saveWorkspace(1, remaining, 'delete'), { revision: 2 })
+    assert.deepEqual(JSON.parse(previous()), { activeProjectId: kept.id, projects: [kept], deletedProjectIds: ['first-unsaved'] })
+    log('late-first', 'first-unsaved')
+    log('late-removed', 'remove')
+    log('late-unsaved', 'unsaved')
+    log('late-kept', 'keep')
+    assert.deepEqual(logs(), ['keep', 'keep'])
+    assert.deepEqual(store.saveWorkspace(2, initially), { conflict: true, revision: 2, snapshot: remaining })
+
+    const replacement = JSON.stringify({ projects: [{ id: 'replacement', manuscript: '' }], deletedProjectIds: [kept.id] })
+    assert.deepEqual(store.saveWorkspace(2, replacement), { revision: 3 })
+    assert.equal(previous(), null)
+    assert.deepEqual(logs(), [])
+  } finally {
+    db.close()
+    logger.close()
+    store.close()
+    rmSync(filename, { force: true })
+    rmdirSync(directory)
+  }
+})
