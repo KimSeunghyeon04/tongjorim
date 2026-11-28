@@ -815,6 +815,7 @@ function openSavedScene({ history = false } = {}) {
   const project = currentProject()
   const scene = selectedScene(project)
   if (!scene || sceneRewrite.disabled) return
+  closeRequestPreview()
   const original = project.manuscript
   const { start, end } = scene.range
   const index = project.savedScenes.indexOf(scene)
@@ -843,6 +844,7 @@ function openArchivedScene(id, version) {
   const project = currentProject()
   const scene = project.sceneDocument.scenes[id]
   if (!scene) return
+  closeRequestPreview()
   const returnDraft = currentContinuation()
   continuations.set(project, {
     archive: scene, original: project.manuscript, document: project.sceneDocument,
@@ -1474,6 +1476,7 @@ function showContinuationVersion(index) {
   if (!draft || activeRequest || planAssistant.busy || sceneChatAssistant.busy || !draft.versions[index] || index === draft.selected) return
   draft.selected = index
   draft.feedback = ''
+  closeRequestPreview()
   renderContinuation()
   syncControls()
 }
@@ -1530,10 +1533,9 @@ async function rewriteContinuation() {
   const project = currentProject()
   const draft = currentContinuation()
   if (!draft || continuationRewrite.disabled) return
-  if (previewOrigin?.button.id === 'preview-scene-request') {
-    closeRequestPreview()
-    switchPanel('continuation')
-  }
+  const fromScenePreview = previewOrigin?.button.id === 'preview-scene-request'
+  closeRequestPreview()
+  if (fromScenePreview) switchPanel('continuation')
   const parent = draft.selected
   const controller = new AbortController()
   const { signal } = controller
@@ -1589,6 +1591,8 @@ async function rewriteContinuation() {
 
 function closeContinuation(project) {
   const draft = continuations.get(project)
+  const fromScenePreview = previewOrigin?.button.id === 'preview-scene-request'
+  closeRequestPreview()
   if (draft.returnDraft) {
     continuations.set(project, draft.returnDraft)
     renderContinuation()
@@ -1596,8 +1600,7 @@ function closeContinuation(project) {
     syncControls()
     return
   }
-  if (['continuation', 'scene-chat'].includes(manuscriptPanel) || previewOrigin?.button.id === 'preview-scene-request') {
-    closeRequestPreview()
+  if (['continuation', 'scene-chat'].includes(manuscriptPanel) || fromScenePreview) {
     switchPanel(draft.previousPanel)
   }
   continuations.delete(project)
@@ -2633,6 +2636,7 @@ continuationDirection.addEventListener('input', () => {
   const draft = currentContinuation()
   draft.direction = continuationDirection.value
   draft.feedback = ''
+  closeRequestPreview()
   syncControls()
 })
 get('continuation-composer').addEventListener('submit', event => {
