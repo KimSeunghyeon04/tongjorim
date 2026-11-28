@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { setupPlanProgress } from '../public/plan-progress.mjs'
+import { exportProject, readProject } from '../public/project-files.mjs'
 import { editSceneDocument, insertScene, saveSceneVersion } from '../public/scene-document.mjs'
 import { setupSceneReviewJobs } from '../public/scene-review-jobs.mjs'
 import { markSceneForReview, pendingLoreChanges } from '../public/scene-review.mjs'
@@ -131,17 +132,6 @@ function reply(content) {
     JSON.stringify({ type: 'done' }) + '\n')
 }
 
-test('채택 후 직접 편집된 대기 장면은 AI 검토에 보내지 않는다', t => {
-  const project = makeProject('시험 원고', gate)
-  markSceneForReview(project, project.savedScenes[0])
-  editFirstScene(project, paragraphs(gate, unrelated))
-  const fetch = t.mock.method(globalThis, 'fetch', async () => reply(extraction))
-  const jobs = setupSceneReviewJobs({ hasProject: () => true, onChange() {} })
-  jobs.start(project)
-  assert.equal(fetch.mock.callCount(), 0)
-  assert.equal(project.sceneReviews[0].pending, true)
-})
-
 test('새 검토는 편집 후에도 근거가 있는 이전 줄거리 진행과 로어북 제안을 중복 생성하지 않는다', { timeout: 5000 }, async t => {
   const project = reviewedProject()
   editFirstScene(project, paragraphs(gate, corridor, '나래가 돌아섰다!'))
@@ -168,14 +158,16 @@ test('새 검토는 편집 후에도 근거가 있는 이전 줄거리 진행과
   assert.deepEqual(pendingLoreChanges(project).map(({ proposal }) => proposal.name), ['수문', '회랑'])
 })
 
-test('두 검토 응답 대기 중 각각 원고가 달라지면 이전 결과를 저장하지 않는다', { timeout: 5000 }, async t => {
+test('두 검토 응답 대기 중 각각 원고가 달라지면 이전 결과를 버리고 최신 본문을 다시 검토한다', { timeout: 5000 }, async t => {
   for (const stage of [1, 2]) {
     await t.test(`${stage}차 응답 대기 중 편집`, async t => {
-      const project = makeProject('시험 원고', paragraphs(gate, corridor))
+      const old = paragraphs(gate, '회랑은 저녁에 열린다.')
+      const project = makeProject('시험 원고', old)
       project.synopsis = milestone
       markSceneForReview(project, project.savedScenes[0])
       const requested = Promise.withResolvers()
       const respond = Promise.withResolvers()
+      const interrupted = Promise.withResolvers()
       const finished = Promise.withResolvers()
       const requests = []
       t.mock.method(globalThis, 'fetch', async (_path, { body }) => {
@@ -184,26 +176,51 @@ test('두 검토 응답 대기 중 각각 원고가 달라지면 이전 결과�
           requested.resolve()
           await respond.promise
         }
-        return reply(requests.length === 1 ? extraction : resolution)
+        const input = requests.at(-1)
+        if (input.candidates) return reply(resolution)
+        if (requests.length <= stage) return reply(extraction)
+        return reply({
+          progress: [], planChange: null,
+          lore: [{ kind: 'world', name: '회랑', fact: corridor, evidenceIds: [2], scope: 'durable' }],
+        })
       })
-      const jobs = setupSceneReviewJobs({
+      const makeJobs = () => setupSceneReviewJobs({
         hasProject: () => true,
         async saveWorkspace(change) { change(); return true },
-        onChange() {
-          if (jobs.visibleError(project) || !project.sceneReviews[0].pending) finished.resolve()
+        onChange(current) {
+          if (!current.sceneReviews[0].pending) finished.resolve(current)
+          else if (jobs.visibleError(current)) interrupted.resolve()
         },
       })
+      let jobs = makeJobs()
       jobs.start(project)
       await requested.promise
-      editFirstScene(project, paragraphs(gate, '회랑은 낮에 열린다!'))
+      const latest = paragraphs(gate, corridor, unrelated)
+      editFirstScene(project, latest)
       respond.resolve()
-      await finished.promise
+      await interrupted.promise
       assert.equal(requests.length, stage)
-      assert.deepEqual(requests.map(({ scene }) => scene), Array(stage).fill(paragraphs(gate, corridor)))
+      assert.deepEqual(requests.map(({ scene }) => scene), Array(stage).fill(old))
       assert.equal(project.sceneReviews[0].pending, true)
       assert.deepEqual(project.sceneReviews[0].progress, [])
       assert.deepEqual(project.sceneReviews[0].lore, [])
       assert.match(jobs.visibleError(project), /원고가 바뀌었/)
+
+      if (stage === 1) jobs.start(project, { retry: true })
+      else {
+        jobs = makeJobs()
+        const snapshot = JSON.stringify({ version: 2, activeProjectId: project.id, projects: [project] })
+        jobs.start(readWorkspace(snapshot).projects[0])
+      }
+      const reviewed = await finished.promise
+      assert.deepEqual(requests.slice(stage).map(({ scene }) => scene), [latest, latest])
+      assert.equal(reviewed.savedScenes[0].versions.length, 1)
+      assert.equal(reviewed.sceneReviews[0].reviewedText, latest)
+      assert.deepEqual(pendingLoreChanges(reviewed).map(({ proposal }) => proposal.name), ['회랑'])
+      const restored = readProject(JSON.stringify(exportProject(reviewed)))
+      editFirstScene(restored, paragraphs(corridor, gate, '나래가 표를 챙겼다.'))
+      assert.deepEqual(pendingLoreChanges(restored)[0].passages,
+        [{ start: 0, end: 11, text: corridor }])
     })
   }
 })

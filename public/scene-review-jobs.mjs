@@ -11,7 +11,14 @@ export function setupSceneReviewJobs({ hasProject, saveWorkspace, onChange }) {
 
   function start(project, { retry = false } = {}) {
     const previous = jobs.get(project)
-    if (previous?.controller || (previous?.error && !retry) || !pendingReview(project)) return
+    if (previous?.controller || (previous?.error && !retry)) return
+    if (!pendingReview(project)) {
+      if (retry && previous?.error) {
+        previous.error = '다시 검토할 장면 본문이 없어요.'
+        onChange(project)
+      }
+      return
+    }
     const controller = new AbortController()
     const job = { controller, error: '', errorDismissed: false }
     jobs.set(project, job)
@@ -88,7 +95,10 @@ export function setupSceneReviewJobs({ hasProject, saveWorkspace, onChange }) {
         return !alreadyProposed.some(item => item.targetId === proposal.targetId &&
           item.name === proposal.name && item.description === proposal.description)
       })
-      const after = before.map(item => item === review ? { ...item, pending: false, progress: freshProgress, planChange: extracted.planChange, lore } : item)
+      const completedReview = { ...review, pending: false, progress: freshProgress, planChange: extracted.planChange, lore }
+      if ((freshProgress.length || completedReview.planChange || lore.length) &&
+          source.text !== source.scene.versions[review.version].text.trim()) completedReview.reviewedText = source.text
+      const after = before.map(item => item === review ? completedReview : item)
       project.sceneReviews = after
       applied = true
       return () => { if (project.sceneReviews === after) project.sceneReviews = before }

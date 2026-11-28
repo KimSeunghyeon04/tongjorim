@@ -199,7 +199,7 @@ function clean(source, keys) {
     return cleaned
   }
   if (result.sceneReviews) result.sceneReviews = result.sceneReviews.map(review => ({
-    ...pick(review, ['sceneId', 'version', 'pending']),
+    ...pick(review, ['sceneId', 'version', 'pending', 'reviewedText']),
     progress: review.progress.map(item => reviewEntry(item, ['milestone'])),
     planChange: review.planChange && reviewEntry(review.planChange, ['before', 'after']),
     lore: review.lore.map(item => reviewEntry(item, ['id', 'targetId', 'kind', 'name', 'before', 'description', 'conflict'])),

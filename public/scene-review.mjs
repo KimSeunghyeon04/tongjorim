@@ -29,6 +29,8 @@ export function validSceneReviews(reviews) {
   if (!Array.isArray(reviews) || new Set(reviews.map(review => review?.sceneId)).size !== reviews.length) return false
   if (!reviews.every(review => record(review) && text(review.sceneId, 100) &&
     Number.isSafeInteger(review.version) && review.version >= 0 && typeof review.pending === 'boolean' &&
+    (review.reviewedText === undefined || (!review.pending && text(review.reviewedText, sceneDraftLimit) &&
+      review.reviewedText === review.reviewedText.trim() && !review.reviewedText.includes('\r'))) &&
     list(review.progress, validProgress) && (review.planChange === null || validPlanChange(review.planChange)) &&
     list(review.lore, validProposal))) return false
   const ids = reviews.flatMap(review => review.lore.map(entry => entry.id))
@@ -53,10 +55,7 @@ function currentReviewScene(project, { sceneId, version }) {
 }
 
 export function sceneForReview(project, review) {
-  if (!review.pending) return null
-  const source = currentReviewScene(project, review)
-  if (source && project.sceneDocument && source.scene.text !== source.scene.versions[review.version].text) return null
-  return source
+  return review.pending ? currentReviewScene(project, review) : null
 }
 
 function uniquePassageStarts(value) {
@@ -82,10 +81,10 @@ function relocateEvidence(original, current) {
 export function reviewedScene(project, review) {
   if (review.pending) return null
   const source = currentReviewScene(project, review)
-  if (!source || !project.sceneDocument) return source
-  const original = source.scene.versions[review.version].text
-  if (source.scene.text === original) return source
-  return { ...source, findEvidence: relocateEvidence(original.trim(), source.text) }
+  if (!source) return null
+  const original = review.reviewedText ?? (project.sceneDocument ? source.scene.versions[review.version].text.trim() : source.text)
+  if (source.text === original) return source
+  return { ...source, findEvidence: relocateEvidence(original, source.text) }
 }
 
 export function evidenceInScene(source, evidence) {
