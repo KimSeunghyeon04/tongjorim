@@ -17,9 +17,9 @@ import {
   insertScene, mergeScenes, moveSceneStructure, projectSceneDocument, removeScenes, saveSceneVersion, sceneForEdit, splitScene,
 } from './scene-document.mjs'
 import { sceneRevisionHistory, setupDraftChanges } from './draft-changes.mjs'
-import { exportPack, exportProject, readPack, readProject, referenceSettingsFor } from './project-files.mjs'
-import { currentProjectOf, makeProject, mergeModelSettings, projectName, readWorkspace, workspaceMatchesSnapshot } from './writing-workspace.mjs'
-import { cacheWorkspace, openWorkspaceStorage, readCachedWorkspace, readLatestWorkspace, storageConflictMessage, storageKey, workspaceChangeEvent, workspaceStatusEvent, workspaceStorageStatus } from './workspace-storage.mjs'
+import { exportPack, exportProject, readPack, referenceSettingsFor } from './project-files.mjs'
+import { currentProjectOf, makeProject, mergeModelSettings, projectName, readProjectBackups, readWorkspace, workspaceMatchesSnapshot } from './writing-workspace.mjs'
+import { cacheWorkspace, openWorkspaceStorage, readCachedWorkspace, readLatestWorkspace, recoverWorkspace, storageConflictMessage, storageKey, workspaceChangeEvent, workspaceStatusEvent, workspaceStorageStatus } from './workspace-storage.mjs'
 import { setupResearch } from './research-panel.mjs'
 import { setupLorebook } from './lorebook-panel.mjs'
 import { setupLoreReviews } from './lore-review-panel.mjs'
@@ -195,6 +195,7 @@ function showStorageStatus() {
   const status = workspaceStorageStatus()
   const warning = storageWarning || status.warning
   get('storage-error').hidden = !warning
+  get('open-workspace-recovery').hidden = !status.conflict
   const message = get('storage-error-message')
   if (message.textContent !== warning) message.textContent = warning
   const label = warning ? '저장 상태 확인' : status.saving ? '서버에 저장 중…'
@@ -2710,8 +2711,8 @@ function renderManuscriptText(text) {
   renderMemory()
   writingInputsChanged()
 }
-function download(content, extension, type) {
-  const title = projectName(currentProject()).replace(/[<>:"/\\|?*]/g, '_')
+function download(content, extension, type, name = projectName(currentProject())) {
+  const title = name.replace(/[<>:"/\\|?*]/g, '_')
   const url = URL.createObjectURL(new Blob([content], { type }))
   const link = document.createElement('a')
   link.href = url
@@ -2754,6 +2755,57 @@ function downloadProjectBackup() {
 }
 get('download-backup').addEventListener('click', downloadProjectBackup)
 get('download-storage-backup').addEventListener('click', downloadProjectBackup)
+
+const recoveryDialog = get('workspace-recovery')
+const recoveryStatus = get('workspace-recovery-status')
+const recoveryFile = get('workspace-recovery-file')
+const recoveryButtons = ['close-workspace-recovery', 'backup-conflicted-workspace', 'recover-server-workspace'].map(get)
+
+function verifyRecoverySnapshot(snapshot) {
+  if (activeRequest || planAssistant.busy || sceneChatAssistant.busy || continuations.size || manuscriptComposition) {
+    throw new Error('진행 중인 작업이나 열린 장면 초안을 마친 뒤 다시 시도해 주세요.')
+  }
+  if (!storageReadable || !snapshot || snapshot !== savedVersion || hasUnsavedWorkspace()) {
+    throw new Error('현재 탭의 편집본이 작업공간 백업과 달라요. 편집본을 백업한 뒤 다시 열어 주세요.')
+  }
+}
+
+get('open-workspace-recovery').addEventListener('click', () => {
+  recoveryStatus.textContent = ''
+  recoveryDialog.showModal()
+})
+get('backup-conflicted-workspace').addEventListener('click', () => {
+  try {
+    verifyRecoverySnapshot(savedVersion)
+    download(savedVersion, '통조림-충돌.json', 'application/json;charset=utf-8', '작업공간')
+    recoveryStatus.textContent = '내려받은 파일을 선택해 주세요.'
+  } catch (error) {
+    recoveryStatus.textContent = error.message
+  }
+})
+get('recover-server-workspace').addEventListener('click', () => recoveryFile.click())
+recoveryDialog.addEventListener('cancel', event => {
+  if (recoveryButtons[0].disabled) event.preventDefault()
+})
+recoveryFile.addEventListener('change', async () => {
+  const file = recoveryFile.files[0]
+  recoveryFile.value = ''
+  if (!file) return
+  for (const button of recoveryButtons) button.disabled = true
+  recoveryStatus.textContent = '백업 파일과 서버 사본을 확인하는 중이에요.'
+  try {
+    const snapshot = await file.text()
+    const verify = () => verifyRecoverySnapshot(snapshot)
+    verify()
+    await recoverWorkspace(snapshot, verify)
+    window.location.reload()
+  } catch (error) {
+    recoveryStatus.textContent = error.message
+  } finally {
+    for (const button of recoveryButtons) button.disabled = false
+  }
+})
+
 get('open-delete-project').addEventListener('click', () => {
   pendingProjectDeletion = currentProject()
   get('delete-project-message').textContent =
@@ -2840,11 +2892,13 @@ function bindProjectImport(action, read, prepare) {
     }
   })
 }
-bindProjectImport('restore-backup', readProject, async restored => {
-  workspace.projects.push(restored)
-  workspace.activeProjectId = restored.id
+bindProjectImport('restore-backup', readProjectBackups, async restored => {
+  workspace.projects = [...workspace.projects, ...restored]
+  workspace.activeProjectId = restored[0].id
   renderWorkspace()
-  fileStatus(await saveWorkspace() ? `‘${projectName(restored)}’을 새 작품으로 복원했어요.` : '불러왔지만 브라우저에 저장할 수 없어요.')
+  const message = restored.length === 1 ? `‘${projectName(restored[0])}’을 새 작품으로 복원했어요.`
+    : `작품 ${formatNumber.format(restored.length)}개를 새 작품으로 복원했어요.`
+  fileStatus(await saveWorkspace() ? message : '불러왔지만 브라우저에 저장할 수 없어요.')
 })
 bindProjectImport('import-pack', readPack, (settings, project) => {
   const details = [`‘${projectName(project)}’의 선택한 설정을 교체해요.`]

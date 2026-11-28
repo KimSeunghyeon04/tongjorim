@@ -6,7 +6,7 @@ export const workspaceChangeEvent = 'relay:workspace-change'
 export const storageConflictMessage = '다른 탭에서 작품이 바뀌어 이 탭의 변경을 저장할 수 없어요.'
 const snapshotOrderKey = `${storageKey}:snapshot-order`
 const notifications = typeof window.BroadcastChannel === 'function' ? new window.BroadcastChannel(storageKey) : null
-const conflictMessage = '서버에 더 최근의 작업공간이 있어요. 이 탭의 작업을 JSON으로 백업해 주세요.'
+const conflictMessage = '서버에 더 최근의 작업공간이 있어요. 편집본을 백업한 뒤 서버 사본을 열 수 있어요.'
 const unavailableMessage = '서버에 저장할 수 없어요. 통조림 서버 연결을 확인해 주세요.'
 const sizeMessage = '작업공간이 서버 저장 한도를 넘었어요. 현재 작품을 JSON으로 백업해 주세요.'
 let opening
@@ -27,11 +27,17 @@ function readCache() {
   return cachedEntry
 }
 
-function writeCache(entry) {
-  cachedEntry = entry
-  if (!memoryOnly) {
-    try { localStorage.setItem(storageKey, JSON.stringify(entry)) } catch { memoryOnly = true }
+function writeCache(entry, durable = false) {
+  if (!memoryOnly || durable) {
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(entry))
+      memoryOnly = false
+    } catch {
+      if (durable) throw new Error('서버 사본을 브라우저에 저장할 수 없어요.')
+      memoryOnly = true
+    }
   }
+  cachedEntry = entry
 }
 
 function openCacheDatabase() {
@@ -49,10 +55,10 @@ function openCacheDatabase() {
   }).catch(() => null)
 }
 
-async function changeCache(action) {
+async function changeCache(action, { durable = false } = {}) {
   const database = await (cacheDatabase ??= openCacheDatabase())
   if (!database) {
-    const apply = async () => action(readCache(), writeCache)
+    const apply = async () => action(readCache(), entry => writeCache(entry, durable))
     return navigator.locks ? navigator.locks.request(`${storageKey}:cache`, apply) : apply()
   }
   // localStorage can still expose an older value after a Web Lock passes to another renderer.
@@ -205,6 +211,31 @@ export async function cacheWorkspace(prepare) {
   } finally {
     queueing--
   }
+}
+
+export async function recoverWorkspace(snapshot, verifyLocal) {
+  async function recover() {
+    const before = await changeCache(entry => entry)
+    if (!before?.pending || before.snapshot !== snapshot) {
+      throw new Error('현재 충돌한 편집본과 같은 백업 파일을 선택해 주세요.')
+    }
+    const remote = await requestWorkspace()
+    if (!Number.isSafeInteger(remote.revision) || remote.revision < 1 || typeof remote.snapshot !== 'string') {
+      throw new Error('서버 사본을 열 수 없어요.')
+    }
+    try { readWorkspace(remote.snapshot) } catch { throw new Error('서버 사본을 열 수 없어요.') }
+    await changeCache((latest, update) => {
+      if (!latest?.pending || latest.revision !== before.revision || latest.attempt !== before.attempt ||
+          latest.snapshot !== snapshot) {
+        throw new Error('복구하는 동안 편집본이 바뀌었어요. 다시 백업해 주세요.')
+      }
+      verifyLocal?.()
+      update({ revision: remote.revision, snapshot: remote.snapshot, pending: false })
+    }, { durable: true })
+    warning = ''
+    publish()
+  }
+  return navigator.locks ? navigator.locks.request(storageKey, recover) : recover()
 }
 
 function pendingSave(entry, update) {

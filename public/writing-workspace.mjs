@@ -1,4 +1,4 @@
-import { hasSceneNote, normalizeProject, referenceSettingsFor, validProject, validProjectBase } from './project-files.mjs'
+import { hasSceneNote, normalizeProject, readProject, referenceSettingsFor, restoreProject, validProject, validProjectBase } from './project-files.mjs'
 import { searchFor } from './retrieval.mjs'
 import { appendParagraphs, freeModel, normalizeLineEndings, optionalProjectModels } from './writing-config.mjs'
 import { attachSceneDocument, createSceneDocument } from './scene-document.mjs'
@@ -55,7 +55,18 @@ function mergeProjectScenes({ scenes, activeSceneId, ...project }) {
 
 export function readWorkspace(serialized) {
   if (serialized === null) return sampleWorkspace()
-  const data = JSON.parse(serialized)
+  return normalizeWorkspace(JSON.parse(serialized))
+}
+
+export function readProjectBackups(text) {
+  let data
+  try { data = JSON.parse(text) } catch { throw new Error('유효한 JSON 파일을 선택해 주세요.') }
+  if (data?.kind !== undefined || !Array.isArray(data?.projects)) return [readProject(text)]
+  try { return normalizeWorkspace(data).projects.map(restoreProject) }
+  catch { throw new Error('작업공간 백업의 원고나 작품 설정을 확인해 주세요.') }
+}
+
+function normalizeWorkspace(data) {
   if (![1, workspaceVersion].includes(data?.version) || !Array.isArray(data.projects) || !data.projects.length ||
       !data.projects.every(validProjectBase)) {
     throw new Error('Unknown workspace')

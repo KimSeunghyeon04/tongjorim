@@ -221,8 +221,11 @@ export function exportProject(project) {
 }
 
 export function readProject(text) {
-  const file = readVersion(text, 'relay-project')
-  const data = { ...file.project, id: crypto.randomUUID() }
+  return restoreProject(readVersion(text, 'relay-project').project)
+}
+
+export function restoreProject(source) {
+  const data = { ...source, id: crypto.randomUUID() }
   if (!validProject(data)) throw new Error('원고나 작품 설정의 형식이 올바르지 않아요.')
   const project = { ...clean(normalizeProject(data), projectKeys), id: data.id }
   return project.sceneDocument ? attachSceneDocument(project) : project
