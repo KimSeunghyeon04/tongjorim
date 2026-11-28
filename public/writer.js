@@ -1195,6 +1195,10 @@ function selectLoreCard(id, selected, { preview = false } = {}) {
   if (preview) showRequestPreview({ loreFocus: id })
 }
 
+function consumeAddedLoreCards(project) {
+  if (addedLoreCards.delete(project)) lorebook.renderQuick()
+}
+
 async function showRequestPreview({ refreshSemantic = false, origin, loreFocus } = {}) {
   if (activePreview || activeRequest || planAssistant.busy) return
   if (origin) previewOrigin = { button: origin, panel: manuscriptPanel }
@@ -1315,8 +1319,7 @@ async function continueManuscript() {
       previousPanel: manuscriptPanel, versions: [{ text, direction: body.draft.direction, parent: null, result, truncated: result.truncated }],
       selected: 0, firstEditableVersion: 0, direction: '', feedback: '',
     })
-    addedLoreCards.delete(project)
-    lorebook.renderQuick()
+    consumeAddedLoreCards(project)
     writingStatus.textContent = ''
   } catch (error) {
     writingStatus.textContent = completionFailure(error, signal)
@@ -1578,6 +1581,7 @@ async function rewriteContinuation() {
     draft.selected = draft.versions.length - 1
     draft.direction = ''
     draft.feedback = ''
+    consumeAddedLoreCards(project)
     renderContinuation()
   } catch (error) {
     draft.feedback = completionFailure(error, signal)
